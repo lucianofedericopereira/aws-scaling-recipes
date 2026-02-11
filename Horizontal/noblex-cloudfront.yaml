@@ -1,0 +1,115 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Noblex / NEWSAN (2022) — CloudFront CDN.
+  Offloads static assets (images, JS, CSS) from ALB origin.
+  Reduces ALB origin load by ~60-70% during peak promotional traffic.
+  WAF web ACL for DDoS protection.
+
+Parameters:
+  AlbDnsName:
+    Type: String
+    Description: DNS name of the Noblex ALB (from noblex-alb-config stack)
+  WafWebAclArn:
+    Type: String
+    Description: WAF web ACL ARN (must be in us-east-1 for CloudFront)
+
+Resources:
+  StaticAssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "noblex-static-${AWS::AccountId}"
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  StaticAssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticAssetsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
+            Action: s3:GetObject
+            Resource: !Sub "arn:aws:s3:::noblex-static-${AWS::AccountId}/*"
+
+  CloudFrontOAI:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: Noblex static assets OAI
+
+  NoblexDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Noblex promotional campaign CDN
+        WebACLId: !Ref WafWebAclArn
+        Origins:
+          - Id: s3-static-assets
+            DomainName: !GetAtt StaticAssetsBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOAI}"
+
+          - Id: alb-api
+            DomainName: !Ref AlbDnsName
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              HTTPSPort: 443
+              OriginReadTimeout: 30
+              OriginKeepaliveTimeout: 5
+
+        CacheBehaviors:
+          # Static assets: JS, CSS — long cache (1 day default, 7 day max)
+          - PathPattern: "/static/*"
+            TargetOriginId: s3-static-assets
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # CachingOptimized
+            Compress: true
+
+          # Product images — medium cache (1 hour)
+          - PathPattern: "/images/*"
+            TargetOriginId: s3-static-assets
+            ViewerProtocolPolicy: redirect-to-https
+            CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # CachingOptimized
+            Compress: true
+
+        DefaultCacheBehavior:
+          # API — no cache, forward all to ALB
+          TargetOriginId: alb-api
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # CachingDisabled
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3   # AllViewer
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+
+      Tags:
+        - Key: Project
+          Value: noblex
+
+Outputs:
+  DistributionId:
+    Description: CloudFront distribution ID
+    Value: !Ref NoblexDistribution
+
+  DistributionDomainName:
+    Description: CloudFront distribution domain name
+    Value: !GetAtt NoblexDistribution.DomainName
+    Export:
+      Name: !Sub "${AWS::StackName}-CDNDomainName"
+
+  StaticAssetsBucketName:
+    Description: S3 bucket for static assets
+    Value: !Ref StaticAssetsBucket

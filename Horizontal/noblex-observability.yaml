@@ -1,0 +1,133 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Noblex / NEWSAN (2022) — Observability Stack.
+  CloudWatch alarms for the promotional campaign: 5xx spikes, latency degradation,
+  ASG near-max capacity, and Aurora ACU saturation.
+  X-Ray sampling and structured logging configuration documented as outputs.
+
+Parameters:
+  OpsTeamEmail:
+    Type: String
+    Description: Email address for ops team SNS notifications
+  PagerDutyEndpoint:
+    Type: String
+    Description: PagerDuty HTTPS endpoint for critical alarms (SNS subscription)
+  AsgName:
+    Type: String
+    Description: Auto Scaling Group name (from noblex-asg-config stack)
+  AlbArn:
+    Type: String
+    Description: ALB ARN (used to derive ALB dimension for CloudWatch)
+  TargetGroupArn:
+    Type: String
+    Description: Target group ARN (used to derive TG dimension for CloudWatch)
+  DbClusterIdentifier:
+    Type: String
+    Default: noblex-promo-db
+    Description: Aurora cluster identifier
+
+Resources:
+  OpsTeamTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: noblex-ops-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref OpsTeamEmail
+
+  CriticalAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: noblex-critical-alerts
+      Subscription:
+        - Protocol: https
+          Endpoint: !Ref PagerDutyEndpoint
+
+  # 5xx spike — any 5xx during the promo is revenue loss
+  FiveXxSpikeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: noblex-5xx-spike
+      AlarmDescription: "5xx errors > 10 in 1 min — revenue loss during promotion"
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split ["loadbalancer/", !Ref AlbArn]]
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref CriticalAlertsTopic
+
+  # Latency degradation — p95 > 500ms
+  LatencyDegradationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: noblex-latency-degradation
+      AlarmDescription: "p95 latency > 500ms — degraded user experience"
+      MetricName: TargetResponseTime
+      Namespace: AWS/ApplicationELB
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split ["loadbalancer/", !Ref AlbArn]]
+      ExtendedStatistic: p95
+      Period: 120
+      EvaluationPeriods: 1
+      Threshold: 0.5
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+  # ASG near max capacity (18 of 20) — running out of scaling headroom
+  AsgNearMaxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: noblex-asg-near-max
+      AlarmDescription: "ASG at 18+ instances (max 20) — scaling headroom nearly exhausted"
+      MetricName: GroupInServiceInstances
+      Namespace: AWS/AutoScaling
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AsgName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 18
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+  # Aurora capacity high (56 of 64 ACU) — approaching database scaling limit
+  AuroraCapacityHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: noblex-aurora-capacity-high
+      AlarmDescription: "Aurora capacity >= 56 ACU (max 64) — notify DBA team"
+      MetricName: ServerlessDatabaseCapacity
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref DbClusterIdentifier
+      Statistic: Maximum
+      Period: 120
+      EvaluationPeriods: 1
+      Threshold: 56
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+Outputs:
+  OpsTeamTopicArn:
+    Description: SNS topic for ops team alerts
+    Value: !Ref OpsTeamTopic
+
+  CriticalAlertsTopicArn:
+    Description: SNS topic for critical alerts (PagerDuty)
+    Value: !Ref CriticalAlertsTopic

@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Buschi (2020) — CloudWatch Monitoring.
+  Alarms for vertical scaling decisions: EC2 CPU, RDS IOPS saturation,
+  SQS queue depth, and SQS oldest message age.
+
+Parameters:
+  OpsTeamEmail:
+    Type: String
+    Description: Email address for ops team SNS notifications
+  Ec2InstanceId:
+    Type: String
+    Description: EC2 instance ID to monitor (e.g., PDF flattening node)
+  DbInstanceIdentifier:
+    Type: String
+    Description: RDS instance identifier (e.g., buschi-print-metadata)
+  ProvisionedReadIops:
+    Type: Number
+    Default: 3000
+    Description: Provisioned read IOPS on the RDS instance (for threshold calculation)
+
+Resources:
+  OpsTeamTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: buschi-ops-alerts
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref OpsTeamEmail
+
+  # EC2 CPU high — signal to evaluate next instance size upgrade
+  Ec2CpuHighAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buschi-ec2-cpu-high
+      AlarmDescription: >
+        EC2 CPU > 80% for 5 min — evaluate upgrade to next instance size.
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Ec2InstanceId
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+  # RDS IOPS saturation — signal to increase provisioned IOPS
+  RdsIopsSaturationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buschi-rds-iops-saturation
+      AlarmDescription: >
+        RDS ReadIOPS > 90% of provisioned — increase provisioned IOPS.
+      MetricName: ReadIOPS
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DbInstanceIdentifier
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Sub "${ProvisionedReadIops}"
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+  # SQS queue depth — jobs backing up
+  SqsQueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buschi-sqs-queue-depth
+      AlarmDescription: >
+        SQS visible messages > 100 — processing cannot keep pace with incoming jobs.
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Dimensions:
+        - Name: QueueName
+          Value: buschi-print-job-queue
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 100
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+  # SQS oldest message — jobs stuck in queue (possible processing failure)
+  SqsOldestMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: buschi-sqs-oldest-message
+      AlarmDescription: >
+        SQS oldest message > 30 min — jobs stuck, possible processing failure.
+      MetricName: ApproximateAgeOfOldestMessage
+      Namespace: AWS/SQS
+      Dimensions:
+        - Name: QueueName
+          Value: buschi-print-job-queue
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1800
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref OpsTeamTopic
+
+Outputs:
+  OpsTeamTopicArn:
+    Description: SNS topic ARN for ops team alerts
+    Value: !Ref OpsTeamTopic

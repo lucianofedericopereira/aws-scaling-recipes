@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Noblex / NEWSAN (2022) — Aurora Serverless v2 + RDS Proxy.
+  Scales from 2 to 64 ACUs automatically. Two read replicas for SELECT queries.
+  RDS Proxy prevents connection storms during ASG scale-out events.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Aurora
+  DbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for Aurora (minimum 2 AZs)
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the Noblex app instances (source for DB access)
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master password for Aurora
+
+Resources:
+  AuroraSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Noblex Aurora subnet group
+      SubnetIds: !Ref DbSubnetIds
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  AuroraSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Noblex Aurora — allow access from app instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: noblex-aurora-sg
+        - Key: Project
+          Value: noblex
+
+  # Aurora Serverless v2: min 2 ACU, max 64 ACU
+  NoblexDBCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: noblex-promo-db
+      Engine: aurora-postgresql
+      EngineVersion: "14.6"
+      MasterUsername: noblex_admin
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref AuroraSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 2
+        MaxCapacity: 64
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  # Primary writer instance
+  NoblexDBWriter:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref NoblexDBCluster
+      DBInstanceIdentifier: noblex-promo-db-writer
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  # Read replica 1 — distributes SELECT queries for product catalog and inventory
+  NoblexDBReader1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref NoblexDBCluster
+      DBInstanceIdentifier: noblex-promo-db-reader-1
+      DBInstanceClass: db.r6g.large
+      Engine: aurora-postgresql
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  # Read replica 2
+  NoblexDBReader2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref NoblexDBCluster
+      DBInstanceIdentifier: noblex-promo-db-reader-2
+      DBInstanceClass: db.r6g.large
+      Engine: aurora-postgresql
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  # RDS Proxy — pools connections to prevent storm on ASG scale-out
+  RdsProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: noblex-rds-proxy-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+
+  NoblexRDSProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: noblex-promo-proxy
+      EngineFamily: POSTGRESQL
+      RoleArn: !GetAtt RdsProxyRole.Arn
+      Auth:
+        - AuthScheme: SECRETS
+          IAMAuth: DISABLED
+          SecretArn: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:noblex/db-credentials"
+      VpcSubnetIds: !Ref DbSubnetIds
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      IdleClientTimeout: 300
+      MaxConnectionsPercent: 100
+      Tags:
+        - Key: Project
+          Value: noblex
+
+  RdsProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Properties:
+      DBProxyName: !Ref NoblexRDSProxy
+      TargetGroupName: default
+      DBClusterIdentifiers:
+        - !Ref NoblexDBCluster
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: 100
+        MaxIdleConnectionsPercent: 50
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora cluster writer endpoint
+    Value: !GetAtt NoblexDBCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterEndpoint"
+
+  ReaderEndpoint:
+    Description: Aurora cluster reader endpoint
+    Value: !GetAtt NoblexDBCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-ReaderEndpoint"
+
+  ProxyEndpoint:
+    Description: RDS Proxy endpoint (use this in application config)
+    Value: !GetAtt NoblexRDSProxy.Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-ProxyEndpoint"

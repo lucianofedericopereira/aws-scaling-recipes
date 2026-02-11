@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Buschi (2020) — EBS Volume Strategy.
+  Provisions io1 (RIP server), gp2 (prepress temp), and sc1 (job archive)
+  volumes for the professional print pipeline.
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+    Default: us-east-1a
+    Description: AZ where the volumes will be created (must match EC2 instances)
+
+Resources:
+  # RIP server: io1, 500 GB, 5000 IOPS
+  # Rationale: RIP server writes large raster files sequentially.
+  # Provisioned IOPS eliminates I/O wait spikes during peak print job processing.
+  RipServerVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: io1
+      Size: 500
+      Iops: 5000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: buschi-rip-server
+        - Key: Project
+          Value: buschi
+
+  # Prepress temp: gp2, 1000 GB
+  # Rationale: General purpose SSD for intermediate processing files.
+  PrepressTempVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Delete
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: gp2
+      Size: 1000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: buschi-prepress-temp
+        - Key: Project
+          Value: buschi
+
+  # Job archive: sc1, 5000 GB
+  # Rationale: Cold HDD for completed jobs — archival storage for compliance and reprint requests.
+  JobArchiveVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: sc1
+      Size: 5000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: buschi-job-archive
+        - Key: Project
+          Value: buschi
+
+Outputs:
+  RipServerVolumeId:
+    Description: RIP server volume (io1, 500 GB, 5000 IOPS)
+    Value: !Ref RipServerVolume
+
+  PrepressTempVolumeId:
+    Description: Prepress temp volume (gp2, 1000 GB)
+    Value: !Ref PrepressTempVolume
+
+  JobArchiveVolumeId:
+    Description: Job archive volume (sc1, 5000 GB)
+    Value: !Ref JobArchiveVolume

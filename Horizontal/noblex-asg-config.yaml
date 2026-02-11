@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Noblex / NEWSAN (2022) — Auto Scaling Group.
+  Horizontal scaling for the World Cup promotional campaign.
+  ALB target tracking (CPU + request count) + step scaling (latency).
+  Scheduled pre-warm for Oct 30 promotion launch.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the ASG
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Public subnets for the ASG (minimum 2 AZs)
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Pre-baked AMI with app and dependencies
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+  AlbTargetGroupArn:
+    Type: String
+    Description: ARN of the ALB target group (from noblex-alb-config stack)
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Noblex app instances — allow traffic from ALB only
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: noblex-app-sg
+        - Key: Project
+          Value: noblex
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: noblex-promo-lt
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: c5.xlarge   # 4 vCPU, 8 GB RAM
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # Pull latest config from Parameter Store
+            aws ssm get-parameters-by-path --path /noblex/production/ --recursive --with-decryption
+            # Start application
+            systemctl start noblex-api
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: noblex-promo-app
+              - Key: Project
+                Value: noblex
+
+  NoblexASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: noblex-promo-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      MinSize: "2"
+      MaxSize: "20"
+      DesiredCapacity: "4"
+      VPCZoneIdentifier: !Ref SubnetIds
+      TargetGroupARNs:
+        - !Ref AlbTargetGroupArn
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 60
+      Tags:
+        - Key: Name
+          Value: noblex-promo-app
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: noblex
+          PropagateAtLaunch: true
+
+  # Scale based on CPU — keep average at 60%
+  CpuTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref NoblexASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Scale based on ALB request count per target (1000 req/min per instance)
+  RequestCountTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref NoblexASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Select [1, !Split ["targetgroup/", !Ref AlbTargetGroupArn]]
+        TargetValue: 1000
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Pre-warm for Oct 30 promotion launch (min=10, desired=12)
+  PromoWarmupAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref NoblexASG
+      ScheduledActionName: promo-warmup
+      Recurrence: "0 6 30 10 ? 2022"
+      MinSize: 10
+      DesiredCapacity: 12
+
+  # Return to normal capacity Oct 31
+  PromoCooldownAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref NoblexASG
+      ScheduledActionName: promo-cooldown
+      Recurrence: "0 6 31 10 ? 2022"
+      MinSize: 2
+      DesiredCapacity: 4
+
+Outputs:
+  AutoScalingGroupName:
+    Description: Noblex ASG name
+    Value: !Ref NoblexASG
+    Export:
+      Name: !Sub "${AWS::StackName}-ASGName"
+
+  AppSecurityGroupId:
+    Description: App security group ID
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-AppSecurityGroupId"

@@ -1,0 +1,123 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Buschi (2020) — Vertical Scaling EC2 Strategy.
+  Launches the initial compute-optimized, memory-optimized, and storage-optimized
+  instances for the professional print pipeline.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where instances will be launched
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet for the EC2 instances
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: AMI ID (defaults to latest Amazon Linux 2)
+
+Resources:
+  # Security group for all Buschi processing nodes
+  BuschiSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Buschi print pipeline - processing nodes
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/8
+      Tags:
+        - Key: Name
+          Value: buschi-processing-sg
+        - Key: Project
+          Value: buschi
+
+  # Compute-optimized: PDF flattening (initial: c5.large)
+  # Trigger: CPU utilization > 80% sustained -> upgrade to c5.4xlarge
+  # Workload: PDF parsing, layer flattening, color separation
+  PdfFlatteningInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c5.large
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref BuschiSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: buschi-pdf-flattening
+        - Key: Project
+          Value: buschi
+        - Key: ScaleType
+          Value: vertical
+        - Key: UpgradeTo
+          Value: c5.4xlarge
+
+  # Memory-optimized: imposition / page arrangement (initial: m5.xlarge)
+  # Trigger: memory > 75% or swap detected -> upgrade to m5.8xlarge
+  # Workload: Multi-page layout composition, large format posters
+  ImpositionInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: m5.xlarge
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref BuschiSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: buschi-imposition
+        - Key: Project
+          Value: buschi
+        - Key: ScaleType
+          Value: vertical
+        - Key: UpgradeTo
+          Value: m5.8xlarge
+
+  # Storage-optimized: rasterization (initial: i3.large, local NVMe SSD)
+  # Trigger: EBS IOPS saturation or I/O wait > 20% -> upgrade to i3.4xlarge
+  # Workload: Vector-to-raster conversion, high-DPI output
+  RasterizationInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: i3.large
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref BuschiSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: buschi-rasterization
+        - Key: Project
+          Value: buschi
+        - Key: ScaleType
+          Value: vertical
+        - Key: UpgradeTo
+          Value: i3.4xlarge
+
+Outputs:
+  PdfFlatteningInstanceId:
+    Description: PDF Flattening instance (upgrade to c5.4xlarge when CPU > 80%)
+    Value: !Ref PdfFlatteningInstance
+
+  ImpositionInstanceId:
+    Description: Imposition instance (upgrade to m5.8xlarge when memory > 75%)
+    Value: !Ref ImpositionInstance
+
+  RasterizationInstanceId:
+    Description: Rasterization instance (upgrade to i3.4xlarge when I/O wait > 20%)
+    Value: !Ref RasterizationInstance
+
+  SecurityGroupId:
+    Description: Buschi processing nodes security group
+    Value: !Ref BuschiSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroupId"

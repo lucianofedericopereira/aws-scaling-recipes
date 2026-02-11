@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Noblex / NEWSAN (2022) — ElastiCache Redis.
+  Primary + replica cache.r6g.large cluster.
+  Used for session store, product cache, rate limiting, and cart data.
+  Reduces Aurora read load by ~70% during peak promotional traffic.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for ElastiCache
+  CacheSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for ElastiCache (minimum 2 AZs)
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of app instances (source for Redis access)
+
+Resources:
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Noblex Redis — allow access from app instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: noblex-redis-sg
+        - Key: Project
+          Value: noblex
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      CacheSubnetGroupName: noblex-redis-subnets
+      Description: Noblex Redis subnet group
+      SubnetIds: !Ref CacheSubnetIds
+
+  # Primary + 1 replica (NumCacheClusters: 2)
+  # Usage: session store (30 min TTL), product cache (1 min TTL),
+  #        rate limiting (1 min window), cart data (1 hr TTL)
+  NoblexRedisCluster:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupId: noblex-promo-redis
+      ReplicationGroupDescription: Noblex promotional campaign Redis cache
+      CacheNodeType: cache.r6g.large
+      Engine: redis
+      EngineVersion: "7.0"
+      NumCacheClusters: 2   # Primary + replica
+      AutomaticFailoverEnabled: true
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !Ref RedisSecurityGroup
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      Tags:
+        - Key: Project
+          Value: noblex
+
+Outputs:
+  PrimaryEndpoint:
+    Description: Redis primary endpoint (writes)
+    Value: !GetAtt NoblexRedisCluster.PrimaryEndPoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RedisPrimaryEndpoint"
+
+  ReaderEndpoint:
+    Description: Redis reader endpoint (reads)
+    Value: !GetAtt NoblexRedisCluster.ReaderEndPoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RedisReaderEndpoint"
+
+  RedisPort:
+    Description: Redis port
+    Value: !GetAtt NoblexRedisCluster.PrimaryEndPoint.Port
