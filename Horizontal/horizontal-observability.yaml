@@ -55,6 +55,8 @@ Resources:
       Dimensions:
         - Name: LoadBalancer
           Value: !Select [1, !Split ["loadbalancer/", !Ref AlbArn]]
+        - Name: TargetGroup
+          Value: !Select [1, !Split ["targetgroup/", !Ref TargetGroupArn]]
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 1
@@ -76,6 +78,8 @@ Resources:
       Dimensions:
         - Name: LoadBalancer
           Value: !Select [1, !Split ["loadbalancer/", !Ref AlbArn]]
+        - Name: TargetGroup
+          Value: !Select [1, !Split ["targetgroup/", !Ref TargetGroupArn]]
       ExtendedStatistic: p95
       Period: 120
       EvaluationPeriods: 1
