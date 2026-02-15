@@ -76,8 +76,8 @@ Resources:
       DBInstanceClass: db.m5.large
       Engine: postgres
       EngineVersion: "16.9"
-      MasterUsername: !Sub "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:username}}"
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:password}}"
+      MasterUsername: "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:username}}"
+      MasterUserPassword: "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:password}}"
       AllocatedStorage: "500"
       StorageType: io1
       Iops: 3000

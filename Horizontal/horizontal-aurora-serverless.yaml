@@ -55,8 +55,8 @@ Resources:
       DBClusterIdentifier: horizontal-scaling-db
       Engine: aurora-postgresql
       EngineVersion: "16.6"
-      MasterUsername: !Sub "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:username}}"
-      MasterUserPassword: !Sub "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:password}}"
+      MasterUsername: "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:username}}"
+      MasterUserPassword: "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:password}}"
       DBSubnetGroupName: !Ref AuroraSubnetGroup
       VpcSecurityGroupIds:
         - !Ref AuroraSecurityGroup

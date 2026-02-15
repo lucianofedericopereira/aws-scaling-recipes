@@ -90,7 +90,7 @@ check_prerequisites() {
     else
       echo "  [WARN] Secrets Manager secret horizontal-scaling/db-credentials not found"
       echo "         Run: aws secretsmanager create-secret --name horizontal-scaling/db-credentials \\"
-      echo "                --secret-string '{"username":"app_admin","password":"YourPassword"}'"
+      echo '                --secret-string '"'"'{"username":"app_admin","password":"YourPassword"}'"'"
     fi
   fi
 
