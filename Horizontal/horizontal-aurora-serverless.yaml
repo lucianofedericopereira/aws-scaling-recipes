@@ -16,11 +16,6 @@ Parameters:
   AppSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group of the app instances (source for DB access)
-  DBPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    Description: Master password for Aurora (read from SSM at deploy time)
 
 Resources:
   AuroraSubnetGroup:
@@ -59,9 +54,9 @@ Resources:
     Properties:
       DBClusterIdentifier: horizontal-scaling-db
       Engine: aurora-postgresql
-      EngineVersion: "16.2"
-      MasterUsername: app_admin
-      MasterUserPassword: !Ref DBPassword
+      EngineVersion: "16.6"
+      MasterUsername: !Sub "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:horizontal-scaling/db-credentials:SecretString:password}}"
       DBSubnetGroupName: !Ref AuroraSubnetGroup
       VpcSecurityGroupIds:
         - !Ref AuroraSecurityGroup

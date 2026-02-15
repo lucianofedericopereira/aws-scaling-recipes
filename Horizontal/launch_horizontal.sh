@@ -8,14 +8,11 @@
 #
 # Prerequisites:
 #   1. Fill in config.env at the repo root
-#   2. Store DB password in SSM:
-#      aws ssm put-parameter --name /horizontal-scaling/db-password \
-#        --value 'YourPassword' --type SecureString --region <region>
-#   3. Create Secrets Manager secret for RDS Proxy:
+#   2. Create Secrets Manager secret for Aurora + RDS Proxy (used by stack 3):
 #      aws secretsmanager create-secret --name horizontal-scaling/db-credentials \
-#        --secret-string '{"username":"app_admin","password":"YourPassword"}'
-#   4. Provision ACM certificate in $REGION and note the ARN
-#   5. Create WAF Web ACL in us-east-1 and note the ARN
+#        --secret-string '{"username":"app_admin","password":"YourStrongPassword"}'
+#   3. Provision ACM certificate in $REGION and note the ARN
+#   4. Create WAF Web ACL in us-east-1 and note the ARN
 
 set -euo pipefail
 
@@ -35,14 +32,6 @@ echo "=== Horizontal Scaling Recipe — Deployment ==="
 echo "Region:  ${REGION}"
 echo "VPC:     ${VPC_ID}"
 echo ""
-
-# Retrieve DB password from SSM Parameter Store
-DB_PASSWORD=$(aws ssm get-parameter \
-  --name "${HORIZONTAL_DB_PASSWORD_PARAM}" \
-  --with-decryption \
-  --region "${REGION}" \
-  --output text \
-  --query 'Parameter.Value')
 
 # 1. ALB (no upstream dependencies)
 echo "[1/7] Deploying ALB..."
@@ -92,6 +81,8 @@ APP_SG=$(aws cloudformation describe-stacks \
   --output text)
 
 # 3. Aurora Serverless v2 (depends on app security group)
+# Credentials are read from Secrets Manager: horizontal-scaling/db-credentials
+# Create the secret before deploying (see Prerequisites above).
 echo "[3/7] Deploying Aurora Serverless v2..."
 aws cloudformation deploy \
   --stack-name horizontal-scaling-aurora \
@@ -101,8 +92,7 @@ aws cloudformation deploy \
   --parameter-overrides \
       VpcId="${VPC_ID}" \
       DbSubnetIds="${HORIZONTAL_PRIVATE_SUBNET_IDS}" \
-      AppSecurityGroupId="${APP_SG}" \
-      DBPassword="${DB_PASSWORD}"
+      AppSecurityGroupId="${APP_SG}"
 
 # 4. ElastiCache Redis (depends on app security group)
 echo "[4/7] Deploying ElastiCache Redis..."

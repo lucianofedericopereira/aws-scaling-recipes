@@ -8,11 +8,12 @@
 #
 # Prerequisites:
 #   1. Fill in config.env at the repo root
-#   2. Store DB password in SSM:
-#      aws ssm put-parameter --name /vertical-scaling/db-password \
-#        --value 'YourPassword' --type SecureString --region <region>
-#   3. Build and push your processing container to ECR:
+#   2. Build and push your processing container to ECR:
 #      <account>.dkr.ecr.<region>.amazonaws.com/vertical-scaling-processor:latest
+#
+# DB credentials are generated automatically by Secrets Manager (stack 4).
+# Retrieve them after deploy with:
+#   aws secretsmanager get-secret-value --secret-id vertical-scaling/db-credentials
 
 set -euo pipefail
 
@@ -32,14 +33,6 @@ echo "=== Vertical Scaling Recipe — Deployment ==="
 echo "Region:  ${REGION}"
 echo "VPC:     ${VPC_ID}"
 echo ""
-
-# Retrieve DB password from SSM Parameter Store
-DB_PASSWORD=$(aws ssm get-parameter \
-  --name "${VERTICAL_DB_PASSWORD_PARAM}" \
-  --with-decryption \
-  --region "${REGION}" \
-  --output text \
-  --query 'Parameter.Value')
 
 # 1. S3 + SQS job pipeline (no dependencies)
 echo "[1/6] Deploying S3 + SQS pipeline..."
@@ -75,16 +68,17 @@ EC2_SG=$(aws cloudformation describe-stacks \
   --output text)
 
 # 4. RDS (depends on EC2 security group)
+# Password is auto-generated and stored in Secrets Manager by the stack itself.
 echo "[4/6] Deploying RDS..."
 aws cloudformation deploy \
   --stack-name vertical-scaling-rds \
   --template-file "${SCRIPT_DIR}/vertical-rds-scaling.yaml" \
   --region "${REGION}" \
+  --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides \
       VpcId="${VPC_ID}" \
       DbSubnetIds="${VERTICAL_DB_SUBNET_IDS}" \
-      AppSecurityGroupId="${EC2_SG}" \
-      DBPassword="${DB_PASSWORD}"
+      AppSecurityGroupId="${EC2_SG}"
 
 DB_INSTANCE_ID=$(aws cloudformation describe-stacks \
   --stack-name vertical-scaling-rds \
@@ -136,3 +130,5 @@ echo "  vertical-scaling-ec2-strategy"
 echo "  vertical-scaling-rds"
 echo "  vertical-scaling-batch-overflow"
 echo "  vertical-scaling-cloudwatch"
+echo ""
+echo "DB credentials: aws secretsmanager get-secret-value --secret-id vertical-scaling/db-credentials"

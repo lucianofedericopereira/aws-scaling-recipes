@@ -16,13 +16,25 @@ Parameters:
   AppSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group of the processing nodes (source for DB access)
-  DBPassword:
-    Type: String
-    NoEcho: true
-    MinLength: 8
-    Description: Master password for the RDS instance (read from SSM at deploy time)
 
 Resources:
+  # DB credentials stored in Secrets Manager.
+  # The secret is created here with a random password; retrieve it with:
+  #   aws secretsmanager get-secret-value --secret-id vertical-scaling/db-credentials
+  DbCredentialsSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: vertical-scaling/db-credentials
+      Description: Master credentials for the vertical scaling RDS instance
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "app_admin"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludePunctuation: true
+      Tags:
+        - Key: ScalingPattern
+          Value: vertical
+
   DbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -63,9 +75,9 @@ Resources:
       DBInstanceIdentifier: vertical-scaling-db
       DBInstanceClass: db.m5.large
       Engine: postgres
-      EngineVersion: "16.3"
-      MasterUsername: app_admin
-      MasterUserPassword: !Ref DBPassword
+      EngineVersion: "16.9"
+      MasterUsername: !Sub "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:vertical-scaling/db-credentials:SecretString:password}}"
       AllocatedStorage: "500"
       StorageType: io1
       Iops: 3000
