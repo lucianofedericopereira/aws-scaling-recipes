@@ -107,8 +107,8 @@ Resources:
           PropagateAtLaunch: true
 
   # Scale based on CPU - target 60% average utilization
-  # ScaleInCooldown 300s: avoid flapping after a scale-in event.
-  # ScaleOutCooldown 60s: react quickly to traffic spikes.
+  # EstimatedInstanceWarmup 60s: time for a new instance to contribute metrics.
+  # Scale-in cooldown is governed by the ASG DefaultCooldown (300s above).
   CpuTargetTrackingPolicy:
     Type: AWS::AutoScaling::ScalingPolicy
     Properties:
@@ -118,8 +118,7 @@ Resources:
         PredefinedMetricSpecification:
           PredefinedMetricType: ASGAverageCPUUtilization
         TargetValue: 60
-        ScaleInCooldown: 300
-        ScaleOutCooldown: 60
+        EstimatedInstanceWarmup: 60
 
   # Scale based on ALB request count - target 1000 requests/min per instance
   # Adjust TargetValue to match your instance's measured saturation point.
@@ -133,8 +132,7 @@ Resources:
           PredefinedMetricType: ALBRequestCountPerTarget
           ResourceLabel: !Select [1, !Split ["targetgroup/", !Ref AlbTargetGroupArn]]
         TargetValue: 1000
-        ScaleInCooldown: 300
-        ScaleOutCooldown: 60
+        EstimatedInstanceWarmup: 60
 
   # Pre-warm before a known traffic peak (campaign launch, sale start, etc.)
   # Update PromoWarmupCron parameter to your event's start time - 1 hour.
