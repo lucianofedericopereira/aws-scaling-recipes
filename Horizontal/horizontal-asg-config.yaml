@@ -114,11 +114,11 @@ Resources:
     Properties:
       AutoScalingGroupName: !Ref AppASG
       PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 60
       TargetTrackingConfiguration:
         PredefinedMetricSpecification:
           PredefinedMetricType: ASGAverageCPUUtilization
         TargetValue: 60
-        EstimatedInstanceWarmup: 60
 
   # Scale based on ALB request count - target 1000 requests/min per instance
   # Adjust TargetValue to match your instance's measured saturation point.
@@ -127,12 +127,12 @@ Resources:
     Properties:
       AutoScalingGroupName: !Ref AppASG
       PolicyType: TargetTrackingScaling
+      EstimatedInstanceWarmup: 60
       TargetTrackingConfiguration:
         PredefinedMetricSpecification:
           PredefinedMetricType: ALBRequestCountPerTarget
           ResourceLabel: !Select [1, !Split ["targetgroup/", !Ref AlbTargetGroupArn]]
         TargetValue: 1000
-        EstimatedInstanceWarmup: 60
 
   # Pre-warm before a known traffic peak (campaign launch, sale start, etc.)
   # Update PromoWarmupCron parameter to your event's start time - 1 hour.
