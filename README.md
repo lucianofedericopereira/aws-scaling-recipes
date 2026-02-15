@@ -1,54 +1,92 @@
 # AWS Scaling Recipes
 
-**Author:** Luciano Federico Pereira  
-**Purpose:** Real-world AWS scaling patterns from production experience  
+[![CI](https://github.com/your-org/aws-scaling-recipes/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/aws-scaling-recipes/actions/workflows/ci.yml)
 
-## Vertical Scaling
+Production-derived AWS scaling patterns as deployable CloudFormation recipes.
+Two complete, ready-to-deploy scenarios covering the two fundamental scaling strategies.
 
-### Architecture
+| Recipe | Pattern | Stacks | Use when |
+|--------|---------|--------|----------|
+| [Vertical](Vertical/) | Single-instance growth | 6 | Steady load, monolithic/legacy app, batch processing |
+| [Horizontal](Horizontal/) | Elastic fleet + CDN | 7 | Unpredictable spikes, stateless app, consumer-facing |
 
-```
-Client → S3 (incoming PDFs) → SQS → EC2 processing nodes → S3 (output) → On-premise print server
-                                          |
-                                    AWS Batch (overflow)
-```
+---
 
-### EC2 Vertical Scaling Path
-
-| Workload | Initial | Scaled | Trigger |
-|----------|---------|--------|--------|
-| PDF flattening | `c5.large` (2 vCPU, 4 GB) | `c5.4xlarge` (16 vCPU, 32 GB) | CPU > 80% sustained |
-| Imposition | `m5.xlarge` (4 vCPU, 16 GB) | `m5.8xlarge` (32 vCPU, 128 GB) | Memory > 75% or swap |
-| Rasterization | `i3.large` (2 vCPU, 15 GB NVMe) | `i3.4xlarge` (16 vCPU, 122 GB NVMe) | EBS IOPS saturation or I/O wait > 20% |
-
-### Stacks (in deploy order)
-
-1. `buschi-s3-sqs-pipeline` — S3 buckets + SQS job queue (DLQ after 3 failures)
-2. `buschi-ebs-volumes` — io1 (RIP server), gp2 (prepress temp), sc1 (job archive)
-3. `buschi-ec2-strategy` — three EC2 instances at initial sizes
-4. `buschi-rds-scaling` — RDS PostgreSQL db.m4.large, io1 3000 IOPS
-5. `buschi-aws-batch` — overflow compute (scales 0 → 64 vCPU)
-6. `buschi-cloudwatch` — alarms for EC2 CPU, RDS IOPS, SQS depth and age
-
-### Deploy
+## Quickstart
 
 ```bash
-# 1. Store DB password in SSM Parameter Store
-aws ssm put-parameter \
-  --name /buschi/db-password \
-  --value 'YourSecurePassword' \
-  --type SecureString
+# 1. Edit config.env — fill in your VPC, subnets, email, and certificate values
+# 2. Store DB passwords in SSM Parameter Store (commands in config.env)
+# 3. Check prerequisites
+./deploy.sh check
 
-# 2. Edit configuration variables at the top of launch_buschi.sh
-#    (REGION, KEY_NAME, VPC_ID, SUBNET_ID, DB_SUBNET_IDS, OPS_EMAIL)
-
-# 3. Deploy
-./launch_buschi.sh
+# 4. Deploy
+./deploy.sh vertical      # or horizontal, or both
 ```
 
 ---
 
-## Horizontal Scaling
+## Vertical Scaling Recipe
+
+### When to use
+
+- Workload is **batch/queue-driven**: one node processes jobs from a queue
+- Application is **monolithic or stateful**: cannot be distributed across instances
+- Load is **predictable and steady**: grows over weeks, not seconds
+- Simplicity is preferred: resize the instance, no application re-architecture
+
+### Architecture
+
+```
+Client → S3 (incoming jobs) → SQS → EC2 processing nodes → S3 (output)
+                                          |
+                                    AWS Batch (overflow, scales 0→64 vCPU)
+```
+
+### Vertical scaling path
+
+| Node | Initial | Trigger | Upgrade to |
+|------|---------|---------|------------|
+| Compute (CPU-bound) | `c5.large` (2 vCPU, 4 GB) | CPU > 80% sustained | `c5.4xlarge` (16 vCPU, 32 GB) |
+| Memory (in-memory processing) | `m5.xlarge` (4 vCPU, 16 GB) | Memory > 75% or swap | `m5.8xlarge` (32 vCPU, 128 GB) |
+| Storage (high I/O) | `i3.large` (2 vCPU, 15 GB NVMe) | IOPS saturation or I/O wait > 20% | `i3.4xlarge` (16 vCPU, 122 GB NVMe) |
+
+**Scaling action:** stop instance → change `InstanceType` → start instance. No load balancer, no ASG.
+
+### Stacks (deploy order)
+
+| # | Stack | Template | What it creates |
+|---|-------|----------|-----------------|
+| 1 | `vertical-scaling-s3-sqs-pipeline` | [vertical-s3-sqs-pipeline.yaml](Vertical/vertical-s3-sqs-pipeline.yaml) | S3 incoming + output buckets, SQS job queue + DLQ |
+| 2 | `vertical-scaling-ebs-volumes` | [vertical-ebs-volumes.yaml](Vertical/vertical-ebs-volumes.yaml) | io1 (high IOPS), gp3 (temp), sc1 (cold archive) |
+| 3 | `vertical-scaling-ec2-strategy` | [vertical-ec2-strategy.yaml](Vertical/vertical-ec2-strategy.yaml) | 3 EC2 instances with upgrade-path tags |
+| 4 | `vertical-scaling-rds` | [vertical-rds-scaling.yaml](Vertical/vertical-rds-scaling.yaml) | RDS PostgreSQL 16, io1 3000 IOPS, db.m5.large |
+| 5 | `vertical-scaling-batch-overflow` | [vertical-batch-overflow.yaml](Vertical/vertical-batch-overflow.yaml) | AWS Batch compute env (0→64 vCPU overflow) |
+| 6 | `vertical-scaling-cloudwatch` | [vertical-cloudwatch.yaml](Vertical/vertical-cloudwatch.yaml) | Alarms: EC2 CPU, RDS IOPS, SQS depth + age |
+
+### Deploy
+
+```bash
+# Store DB password
+aws ssm put-parameter \
+  --name /vertical-scaling/db-password \
+  --value 'YourSecurePassword' \
+  --type SecureString
+
+# Deploy
+./deploy.sh vertical
+```
+
+---
+
+## Horizontal Scaling Recipe
+
+### When to use
+
+- Traffic is **unpredictable**: spikes from 2 to 20× in minutes (promotions, launches, viral)
+- Application is **stateless**: sessions in Redis, no local state
+- Cost model: pay for capacity only when needed (scale in = savings)
+- Fault tolerance required: multi-AZ, automatic failover
 
 ### Architecture
 
@@ -56,7 +94,7 @@ aws ssm put-parameter \
                     CloudFront CDN
                     (static assets + WAF)
                           |
-                    ALB (Layer 7)
+                    ALB (Layer 7, TLS 1.3)
                           |
               ┌───────────┼───────────┐
               │           │           │
@@ -67,79 +105,131 @@ aws ssm put-parameter \
          ┌────────────────┼────────────────┐
          │                │                │
    Aurora Serverless  ElastiCache      SQS Queues
-   v2 (2–64 ACU)      Redis            (orders, inventory,
-   + RDS Proxy        (session, cache,  notifications)
-   + 2 read replicas   rate limit, cart)
+   v2 (2–64 ACU)      Redis 7          (critical FIFO,
+   + RDS Proxy        (sessions, cache, background tasks,
+   + 2 read replicas   rate limiting)   notifications)
 ```
 
-### Stacks (in deploy order)
+### Key design decisions
 
-1. `noblex-alb-config` — ALB with HTTPS termination, TLS 1.3, health checks
-2. `noblex-asg-config` — ASG with CPU target tracking, request count tracking, scheduled pre-warm
-3. `noblex-aurora-serverless` — Aurora Serverless v2, 2 read replicas, RDS Proxy
-4. `noblex-elasticache-redis` — Redis primary + replica, encrypted at rest and in transit
-5. `noblex-sqs-queues` — FIFO order queue, Standard queues for inventory and notifications
-6. `noblex-cloudfront` — CDN offloads ~60–70% of origin load during peak
-7. `noblex-observability` — alarms for 5xx spikes (PagerDuty), latency, ASG headroom, Aurora ACU
+| Problem | Solution | Rationale |
+|---------|----------|-----------|
+| Unpredictable spikes | ASG (2–20 × c5.xlarge) + pre-warm schedule | Scale elastically; pre-warm before known events |
+| Database connection storms on scale-out | RDS Proxy | Pools connections; 20 new instances don't overwhelm Aurora |
+| Read-heavy workloads | 2 Aurora read replicas + Redis cache | Distribute SELECTs; Redis cuts ~70% of DB read load |
+| Slow synchronous processing | SQS FIFO + Standard queues | Decouple HTTP path from heavy processing |
+| Static asset bandwidth | CloudFront CDN | Offloads ~60–70% of origin traffic; assets served from edge |
+| DDoS / traffic abuse | WAF Web ACL on CloudFront | Rate limiting + rule-based blocking before origin |
+| Scheduled peaks | ASG scheduled actions (pre-warm/cooldown) | Set in `config.env`; update `PROMO_WARMUP_CRON` before each event |
+
+### Stacks (deploy order)
+
+| # | Stack | Template | What it creates |
+|---|-------|----------|-----------------|
+| 1 | `horizontal-scaling-alb` | [horizontal-alb-config.yaml](Horizontal/horizontal-alb-config.yaml) | ALB, TLS 1.3, HTTPS redirect, target group |
+| 2 | `horizontal-scaling-asg` | [horizontal-asg-config.yaml](Horizontal/horizontal-asg-config.yaml) | ASG (2–20), CPU + request-count target tracking, scheduled pre-warm |
+| 3 | `horizontal-scaling-aurora` | [horizontal-aurora-serverless.yaml](Horizontal/horizontal-aurora-serverless.yaml) | Aurora Serverless v2 (2–64 ACU), 2 read replicas, RDS Proxy |
+| 4 | `horizontal-scaling-redis` | [horizontal-elasticache-redis.yaml](Horizontal/horizontal-elasticache-redis.yaml) | Redis 7 primary + replica, encrypted at rest and in transit |
+| 5 | `horizontal-scaling-sqs` | [horizontal-sqs-queues.yaml](Horizontal/horizontal-sqs-queues.yaml) | FIFO queue (critical ops), Standard queues (background, notifications) |
+| 6 | `horizontal-scaling-cloudfront` | [horizontal-cloudfront.yaml](Horizontal/horizontal-cloudfront.yaml) | CloudFront CDN + S3 static assets bucket + WAF association |
+| 7 | `horizontal-scaling-observability` | [horizontal-observability.yaml](Horizontal/horizontal-observability.yaml) | Alarms: 5xx spikes (PagerDuty), latency, ASG headroom, Aurora ACU |
 
 ### Deploy
 
 ```bash
-# 1. Store DB password in SSM Parameter Store
+# Store DB password
 aws ssm put-parameter \
-  --name /noblex/db-password \
+  --name /horizontal-scaling/db-password \
   --value 'YourSecurePassword' \
   --type SecureString
 
-# 2. Edit configuration variables at the top of launch_noblex.sh
-#    (VPC_ID, subnet IDs, CERTIFICATE_ARN, WAF_ACL_ARN, OPS_EMAIL, PAGERDUTY_ENDPOINT)
+# Create Secrets Manager secret for RDS Proxy
+aws secretsmanager create-secret \
+  --name horizontal-scaling/db-credentials \
+  --secret-string '{"username":"app_admin","password":"YourSecurePassword"}'
 
-# 3. Deploy
-./launch_noblex.sh
+# Update config.env: CERTIFICATE_ARN, WAF_ACL_ARN, PROMO_WARMUP_CRON, PROMO_COOLDOWN_CRON
+
+# Deploy
+./deploy.sh horizontal
 ```
-
-### Key Scaling Decisions
-
-| Concern | Solution | Rationale |
-|---------|----------|-----------|
-| Unpredictable traffic | ASG (2–20 × c5.xlarge) + pre-warm schedule | Scale in/out elastically; pre-warm before known promotion start |
-| Database spikes | Aurora Serverless v2 (2–64 ACU) | Pay per ACU-second; no manual intervention during flash sale |
-| Connection storms on scale-out | RDS Proxy | Pools connections so 20 new instances don't overwhelm Aurora |
-| Read-heavy product browsing | 2 read replicas + Redis cache | Distribute SELECTs; Redis cuts ~70% of Aurora read load |
-| Slow synchronous processing | SQS async queues | Decouple payment path from receipt generation, email, inventory sync |
-| Static asset bandwidth | CloudFront CDN | Offloads 60–70% of origin load; product images served from edge |
-| DDoS / traffic abuse | WAF Web ACL on CloudFront | Rate limiting and rule-based blocking before traffic hits origin |
 
 ---
 
 ## Vertical vs. Horizontal: Decision Matrix
 
-| Factor | Vertical (Buschi) | Horizontal (Noblex) |
-|--------|-------------------|---------------------|
+| Factor | Vertical | Horizontal |
+|--------|----------|------------|
 | Traffic pattern | Steady, predictable growth | Explosive, unpredictable spikes |
-| Failure tolerance | Single point of failure | Fault tolerant (multi-AZ ASG) |
-| Scaling ceiling | Largest available instance | Virtually unlimited |
-| Cost model | Fixed (always paying for peak) | Elastic (scale in after peak) |
-| Complexity | Low — just resize the instance | High — ALB, ASG, queues, CDN |
-| Re-architecture needed? | No — monolithic app unchanged | Yes — stateless app, async processing |
-| Application constraint | Monolithic/legacy OK | Must be stateless |
-| Best for | Industrial tools, batch workloads, hybrid on-premise/cloud | Consumer-facing, viral campaigns, API services |
+| Failure tolerance | Single point of failure | Fault tolerant (multi-AZ ASG + Aurora failover) |
+| Scaling ceiling | Largest available instance | Virtually unlimited (add instances) |
+| Cost model | Fixed (always pay for peak) | Elastic (scale in = savings) |
+| Complexity | Low — resize instance type | High — ALB, ASG, queues, CDN, RDS Proxy |
+| Re-architecture needed | No — monolithic/legacy OK | Yes — app must be stateless, sessions in Redis |
+| Scaling speed | Minutes (stop/resize/start) | Seconds (instance boot + health check) |
+| Best for | Batch workloads, hybrid on-premise/cloud, industrial tools | Consumer-facing, viral campaigns, API services |
+
+---
+
+## Configuration
+
+All deployment parameters live in [config.env](config.env). Edit it before deploying:
+
+```bash
+# Network
+VPC_ID="vpc-..."
+VERTICAL_SUBNET_ID="subnet-..."
+HORIZONTAL_PUBLIC_SUBNET_IDS="subnet-...,subnet-..."
+HORIZONTAL_PRIVATE_SUBNET_IDS="subnet-...,subnet-..."
+
+# Notifications
+OPS_EMAIL="ops@example.com"
+
+# Horizontal only
+CERTIFICATE_ARN="arn:aws:acm:..."
+WAF_ACL_ARN="arn:aws:wafv2:us-east-1:..."
+PAGERDUTY_ENDPOINT="https://events.pagerduty.com/integration/.../enqueue"
+
+# Scheduled scaling — update before each known peak
+PROMO_WARMUP_CRON="0 13 27 11 ? 2026"
+PROMO_COOLDOWN_CRON="0 20 27 11 ? 2026"
+```
 
 ---
 
 ## Prerequisites
 
-- AWS CLI v2 configured with IAM credentials that have permissions to create EC2, RDS, SQS, S3, CloudFormation, ElastiCache, CloudFront, and CloudWatch resources
-- An existing VPC with public and private subnets across at least 2 AZs
-- An ACM certificate (for Noblex HTTPS)
-- A WAF Web ACL in `us-east-1` (for Horizontal CloudFront)
-- EC2 Key Pairs for SSH access
+- AWS CLI v2 configured (`aws configure`)
+- IAM permissions: EC2, RDS, SQS, S3, CloudFormation, ElastiCache, CloudFront, Batch, CloudWatch, SSM, Secrets Manager
+- Existing VPC with public subnets (horizontal: also private subnets, minimum 2 AZs)
+- ACM certificate in `$REGION` (horizontal HTTPS)
+- WAF Web ACL in `us-east-1` (horizontal CloudFront)
+
+Verify before deploying:
+
+```bash
+./deploy.sh check
+```
+
+---
+
+## CI
+
+Four jobs run on every push and pull request:
+
+| Job | Tool | What it checks |
+|-----|------|----------------|
+| `secret-scan` | gitleaks | No credentials in git history |
+| `cfn-lint` | cfn-lint | All 13 CloudFormation templates are valid |
+| `shellcheck` | shellcheck | All shell scripts pass static analysis |
+| `placeholder-check` | grep | No `REPLACE_ME` values left in templates |
 
 ---
 
 ## Notes
 
-- **Placeholder values** (`vpc-REPLACE_ME`, `subnet-REPLACE_ME`, etc.) in the launch scripts must be updated before deploying.
-- **Passwords** are read from SSM Parameter Store at deploy time — never hardcode credentials.
-- The `buschi-aws-batch.yaml` stack references an ECR image (`buschi-print:latest`) that must be built and pushed before the Batch job definition can run.
-- The Horizontal scheduled scaling actions (`promo-warmup`, `promo-cooldown`) are set to October 2022 dates. Update the cron expressions for future use.
+- **Passwords** are read from SSM Parameter Store at deploy time — never hardcoded.
+- **RDS Proxy** requires a Secrets Manager secret (`horizontal-scaling/db-credentials`) — create it before deploying the horizontal recipe.
+- **Batch ECR image**: `vertical-batch-overflow.yaml` references `vertical-scaling-processor:latest`. Build and push your processing container before deploying stack 5.
+- **WAF Web ACL**: must exist in `us-east-1` regardless of deployment region (CloudFront requirement).
+- **Scheduled scaling**: update `PROMO_WARMUP_CRON` and `PROMO_COOLDOWN_CRON` in `config.env` before each known traffic peak.

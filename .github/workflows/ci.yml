@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Secret scanning — catch credentials before they land in git history
+  # ---------------------------------------------------------------------------
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # CloudFormation template validation — all 13 templates
+  # ---------------------------------------------------------------------------
+  cfn-lint:
+    name: CloudFormation lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint vertical scaling templates
+        run: |
+          cfn-lint Vertical/vertical-s3-sqs-pipeline.yaml
+          cfn-lint Vertical/vertical-ebs-volumes.yaml
+          cfn-lint Vertical/vertical-ec2-strategy.yaml
+          cfn-lint Vertical/vertical-rds-scaling.yaml
+          cfn-lint Vertical/vertical-batch-overflow.yaml
+          cfn-lint Vertical/vertical-cloudwatch.yaml
+
+      - name: Lint horizontal scaling templates
+        run: |
+          cfn-lint Horizontal/horizontal-alb-config.yaml
+          cfn-lint Horizontal/horizontal-asg-config.yaml
+          cfn-lint Horizontal/horizontal-aurora-serverless.yaml
+          cfn-lint Horizontal/horizontal-elasticache-redis.yaml
+          cfn-lint Horizontal/horizontal-sqs-queues.yaml
+          cfn-lint Horizontal/horizontal-cloudfront.yaml
+          cfn-lint Horizontal/horizontal-observability.yaml
+
+  # ---------------------------------------------------------------------------
+  # Shell script linting
+  # ---------------------------------------------------------------------------
+  shellcheck:
+    name: Shell lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: |
+          shellcheck deploy.sh
+          shellcheck main.sh
+          shellcheck Vertical/launch_vertical.sh
+          shellcheck Horizontal/launch_horizontal.sh
+
+  # ---------------------------------------------------------------------------
+  # Verify no REPLACE_ME placeholders remain in YAML templates
+  # (config.env placeholders are expected; template placeholders are not)
+  # ---------------------------------------------------------------------------
+  placeholder-check:
+    name: Placeholder check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for unreplaced placeholders in CloudFormation templates
+        run: |
+          echo "Checking for REPLACE_ME in CloudFormation templates..."
+          if grep -rn "REPLACE_ME" Vertical/*.yaml Horizontal/*.yaml; then
+            echo "ERROR: CloudFormation templates contain REPLACE_ME placeholders."
+            echo "Templates must use CloudFormation Parameters, not hardcoded placeholder values."
+            exit 1
+          fi
+          echo "No placeholders found in templates."
+
+      - name: Check for hardcoded account IDs in templates
+        run: |
+          echo "Checking for hardcoded AWS account IDs in templates..."
+          # Matches 12-digit account IDs not inside !Sub or dynamic references
+          if grep -rEn "[^{]([0-9]{12})[^}]" Vertical/*.yaml Horizontal/*.yaml | \
+              grep -v "# " | grep -v "!Sub"; then
+            echo "WARNING: Possible hardcoded AWS account IDs found."
+            echo "Use !Sub \"\${AWS::AccountId}\" instead."
+            # Warning only, not a hard failure (some numeric strings are valid)
+          fi
+          echo "Account ID check complete."

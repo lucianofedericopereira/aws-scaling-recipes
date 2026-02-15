@@ -1,9 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Noblex / NEWSAN (2022) — Observability Stack.
-  CloudWatch alarms for the promotional campaign: 5xx spikes, latency degradation,
+  Horizontal Scaling Recipe — Observability Stack.
+  CloudWatch alarms for horizontal scaling events: 5xx spikes, latency degradation,
   ASG near-max capacity, and Aurora ACU saturation.
-  X-Ray sampling and structured logging configuration documented as outputs.
+  Ops team receives email for warnings; PagerDuty receives critical alerts.
 
 Parameters:
   OpsTeamEmail:
@@ -11,10 +11,10 @@ Parameters:
     Description: Email address for ops team SNS notifications
   PagerDutyEndpoint:
     Type: String
-    Description: PagerDuty HTTPS endpoint for critical alarms (SNS subscription)
+    Description: PagerDuty HTTPS endpoint for critical alarms (SNS HTTPS subscription)
   AsgName:
     Type: String
-    Description: Auto Scaling Group name (from noblex-asg-config stack)
+    Description: Auto Scaling Group name (from horizontal-asg-config stack)
   AlbArn:
     Type: String
     Description: ALB ARN (used to derive ALB dimension for CloudWatch)
@@ -23,14 +23,14 @@ Parameters:
     Description: Target group ARN (used to derive TG dimension for CloudWatch)
   DbClusterIdentifier:
     Type: String
-    Default: noblex-promo-db
-    Description: Aurora cluster identifier
+    Default: horizontal-scaling-db
+    Description: Aurora cluster identifier (from horizontal-aurora-serverless stack)
 
 Resources:
   OpsTeamTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: noblex-ops-alerts
+      TopicName: horizontal-scaling-ops-alerts
       Subscription:
         - Protocol: email
           Endpoint: !Ref OpsTeamEmail
@@ -38,17 +38,18 @@ Resources:
   CriticalAlertsTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: noblex-critical-alerts
+      TopicName: horizontal-scaling-critical-alerts
       Subscription:
         - Protocol: https
           Endpoint: !Ref PagerDutyEndpoint
 
-  # 5xx spike — any 5xx during the promo is revenue loss
+  # 5xx spike — any server errors during peak are user-facing failures
+  # Threshold: 10 errors in 1 minute. Adjust down for high-reliability workloads.
   FiveXxSpikeAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: noblex-5xx-spike
-      AlarmDescription: "5xx errors > 10 in 1 min — revenue loss during promotion"
+      AlarmName: horizontal-scaling-5xx-spike
+      AlarmDescription: "5xx errors > 10 in 1 min — investigate ASG instance health and application logs"
       MetricName: HTTPCode_Target_5XX_Count
       Namespace: AWS/ApplicationELB
       Dimensions:
@@ -63,12 +64,13 @@ Resources:
       AlarmActions:
         - !Ref CriticalAlertsTopic
 
-  # Latency degradation — p95 > 500ms
+  # Latency degradation — p95 response time > 500ms
+  # Indicates instances are saturated or downstream services (DB, Redis) are slow.
   LatencyDegradationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: noblex-latency-degradation
-      AlarmDescription: "p95 latency > 500ms — degraded user experience"
+      AlarmName: horizontal-scaling-latency-degradation
+      AlarmDescription: "p95 latency > 500ms — check ASG CPU, Aurora ACU, and Redis CPU"
       MetricName: TargetResponseTime
       Namespace: AWS/ApplicationELB
       Dimensions:
@@ -83,12 +85,13 @@ Resources:
       AlarmActions:
         - !Ref OpsTeamTopic
 
-  # ASG near max capacity (18 of 20) — running out of scaling headroom
+  # ASG near max capacity — approaching scaling ceiling
+  # At 18 of 20 instances: raise MaxSize or investigate if load is expected.
   AsgNearMaxAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: noblex-asg-near-max
-      AlarmDescription: "ASG at 18+ instances (max 20) — scaling headroom nearly exhausted"
+      AlarmName: horizontal-scaling-asg-near-max
+      AlarmDescription: "ASG at 18+ instances (max 20) — scaling headroom nearly exhausted, consider raising MaxSize"
       MetricName: GroupInServiceInstances
       Namespace: AWS/AutoScaling
       Dimensions:
@@ -103,12 +106,13 @@ Resources:
       AlarmActions:
         - !Ref OpsTeamTopic
 
-  # Aurora capacity high (56 of 64 ACU) — approaching database scaling limit
+  # Aurora capacity high — approaching database scaling limit
+  # At 56 of 64 ACU: notify DBA team. MaxCapacity can be raised to 128 ACU.
   AuroraCapacityHighAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: noblex-aurora-capacity-high
-      AlarmDescription: "Aurora capacity >= 56 ACU (max 64) — notify DBA team"
+      AlarmName: horizontal-scaling-aurora-capacity-high
+      AlarmDescription: "Aurora capacity >= 56 ACU (max 64) — consider raising MaxCapacity or adding read replicas"
       MetricName: ServerlessDatabaseCapacity
       Namespace: AWS/RDS
       Dimensions:

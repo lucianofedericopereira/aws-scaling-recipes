@@ -1,8 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Buschi (2020) — CloudWatch Monitoring.
-  Alarms for vertical scaling decisions: EC2 CPU, RDS IOPS saturation,
-  SQS queue depth, and SQS oldest message age.
+  Vertical Scaling Recipe — CloudWatch Monitoring.
+  Alarms that signal when to scale up the primary EC2 instance or RDS instance.
+  These alarms are decision triggers for operators, not automatic scaling actions.
+  Vertical scaling requires a human decision: stop instance, resize, restart.
 
 Parameters:
   OpsTeamEmail:
@@ -10,31 +11,33 @@ Parameters:
     Description: Email address for ops team SNS notifications
   Ec2InstanceId:
     Type: String
-    Description: EC2 instance ID to monitor (e.g., PDF flattening node)
+    Description: EC2 instance ID to monitor (primary compute node)
   DbInstanceIdentifier:
     Type: String
-    Description: RDS instance identifier (e.g., buschi-print-metadata)
+    Description: RDS instance identifier (e.g., vertical-scaling-db)
   ProvisionedReadIops:
     Type: Number
     Default: 3000
-    Description: Provisioned read IOPS on the RDS instance (for threshold calculation)
+    Description: Provisioned read IOPS on the RDS instance (alarm threshold = 90% of this value)
 
 Resources:
   OpsTeamTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: buschi-ops-alerts
+      TopicName: vertical-scaling-ops-alerts
       Subscription:
         - Protocol: email
           Endpoint: !Ref OpsTeamEmail
 
-  # EC2 CPU high — signal to evaluate next instance size upgrade
+  # EC2 CPU high — operator signal to evaluate next instance size
+  # Action: stop instance → change instance type → start instance
   Ec2CpuHighAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: buschi-ec2-cpu-high
+      AlarmName: vertical-scaling-ec2-cpu-high
       AlarmDescription: >
         EC2 CPU > 80% for 5 min — evaluate upgrade to next instance size.
+        Vertical scaling action: stop instance, modify InstanceType, start instance.
       MetricName: CPUUtilization
       Namespace: AWS/EC2
       Dimensions:
@@ -49,13 +52,15 @@ Resources:
       AlarmActions:
         - !Ref OpsTeamTopic
 
-  # RDS IOPS saturation — signal to increase provisioned IOPS
+  # RDS IOPS saturation — signal to increase provisioned IOPS or upgrade instance
+  # Action: modify RDS instance (Iops increase, or DBInstanceClass upgrade)
   RdsIopsSaturationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: buschi-rds-iops-saturation
+      AlarmName: vertical-scaling-rds-iops-saturation
       AlarmDescription: >
-        RDS ReadIOPS > 90% of provisioned — increase provisioned IOPS.
+        RDS ReadIOPS > 90% of provisioned — increase provisioned IOPS or upgrade instance class.
+        Vertical scaling action: modify DB instance IOPS or instance class (causes brief outage).
       MetricName: ReadIOPS
       Namespace: AWS/RDS
       Dimensions:
@@ -70,18 +75,20 @@ Resources:
       AlarmActions:
         - !Ref OpsTeamTopic
 
-  # SQS queue depth — jobs backing up
+  # SQS queue depth — jobs backing up faster than they are processed
+  # Action: check if EC2 instance is at CPU/memory limit; if so, scale up instance
   SqsQueueDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: buschi-sqs-queue-depth
+      AlarmName: vertical-scaling-sqs-queue-depth
       AlarmDescription: >
         SQS visible messages > 100 — processing cannot keep pace with incoming jobs.
+        Check EC2 CPU/memory utilization; if saturated, upgrade instance type.
       MetricName: ApproximateNumberOfMessagesVisible
       Namespace: AWS/SQS
       Dimensions:
         - Name: QueueName
-          Value: buschi-print-job-queue
+          Value: vertical-scaling-job-queue
       Statistic: Sum
       Period: 60
       EvaluationPeriods: 1
@@ -91,18 +98,20 @@ Resources:
       AlarmActions:
         - !Ref OpsTeamTopic
 
-  # SQS oldest message — jobs stuck in queue (possible processing failure)
+  # SQS oldest message — job stuck or processing failure
+  # Action: investigate EC2 process health; restart service if needed
   SqsOldestMessageAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: buschi-sqs-oldest-message
+      AlarmName: vertical-scaling-sqs-oldest-message
       AlarmDescription: >
         SQS oldest message > 30 min — jobs stuck, possible processing failure.
+        Check EC2 application logs; service may need restart or instance may be unresponsive.
       MetricName: ApproximateAgeOfOldestMessage
       Namespace: AWS/SQS
       Dimensions:
         - Name: QueueName
-          Value: buschi-print-job-queue
+          Value: vertical-scaling-job-queue
       Statistic: Maximum
       Period: 60
       EvaluationPeriods: 1

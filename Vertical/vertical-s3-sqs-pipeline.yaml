@@ -1,15 +1,16 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Buschi (2020) — S3 + SQS Job Pipeline.
-  Hybrid on-premise/cloud job flow: client uploads PDF to S3, S3 event triggers
-  SQS, EC2 node processes job, output pushed to S3 for on-premise print server.
+  Vertical Scaling Recipe — S3 + SQS Job Pipeline.
+  Hybrid on-premise/cloud job flow: client uploads file to S3, S3 event triggers
+  SQS, EC2 node processes job, output pushed to S3 for downstream consumption.
+  Use when workload is batch/queue-driven and a single node processes jobs sequentially.
 
 Resources:
   # Incoming jobs bucket
   IncomingJobsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "buschi-print-jobs-incoming-${AWS::AccountId}"
+      BucketName: !Sub "vertical-scaling-jobs-incoming-${AWS::AccountId}"
       LifecycleConfiguration:
         Rules:
           - Id: transition-to-ia
@@ -23,50 +24,50 @@ Resources:
       NotificationConfiguration:
         QueueConfigurations:
           - Event: "s3:ObjectCreated:*"
-            Queue: !GetAtt PrintJobQueue.Arn
+            Queue: !GetAtt JobQueue.Arn
       Tags:
-        - Key: Project
-          Value: buschi
+        - Key: ScalingPattern
+          Value: vertical
 
   # Output bucket for processed jobs
   OutputJobsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "buschi-print-jobs-output-${AWS::AccountId}"
+      BucketName: !Sub "vertical-scaling-jobs-output-${AWS::AccountId}"
       Tags:
-        - Key: Project
-          Value: buschi
+        - Key: ScalingPattern
+          Value: vertical
 
   # Dead-letter queue — jobs that fail 3 times go here for manual review
-  PrintJobDLQ:
+  JobDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: buschi-print-job-dlq
+      QueueName: vertical-scaling-job-dlq
       MessageRetentionPeriod: 1209600   # 14 days
       Tags:
-        - Key: Project
-          Value: buschi
+        - Key: ScalingPattern
+          Value: vertical
 
   # Main job queue
-  PrintJobQueue:
+  JobQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: buschi-print-job-queue
+      QueueName: vertical-scaling-job-queue
       VisibilityTimeout: 300   # 5 min — max single-job processing time
       MessageRetentionPeriod: 1209600   # 14 days
       RedrivePolicy:
-        deadLetterTargetArn: !GetAtt PrintJobDLQ.Arn
+        deadLetterTargetArn: !GetAtt JobDLQ.Arn
         maxReceiveCount: 3   # 3 failures -> DLQ for manual review
       Tags:
-        - Key: Project
-          Value: buschi
+        - Key: ScalingPattern
+          Value: vertical
 
   # Allow S3 to publish to SQS
-  PrintJobQueuePolicy:
+  JobQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref PrintJobQueue
+        - !Ref JobQueue
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -74,30 +75,30 @@ Resources:
             Principal:
               Service: s3.amazonaws.com
             Action: sqs:SendMessage
-            Resource: !GetAtt PrintJobQueue.Arn
+            Resource: !GetAtt JobQueue.Arn
             Condition:
               ArnLike:
-                aws:SourceArn: !Sub "arn:aws:s3:::buschi-print-jobs-incoming-${AWS::AccountId}"
+                aws:SourceArn: !Sub "arn:aws:s3:::vertical-scaling-jobs-incoming-${AWS::AccountId}"
 
 Outputs:
   IncomingBucketName:
-    Description: S3 bucket for incoming print jobs
+    Description: S3 bucket for incoming jobs
     Value: !Ref IncomingJobsBucket
 
   OutputBucketName:
-    Description: S3 bucket for processed print output
+    Description: S3 bucket for processed output
     Value: !Ref OutputJobsBucket
 
-  PrintJobQueueUrl:
-    Description: SQS queue URL for print jobs
-    Value: !Ref PrintJobQueue
+  JobQueueUrl:
+    Description: SQS queue URL for jobs
+    Value: !Ref JobQueue
 
-  PrintJobQueueArn:
-    Description: SQS queue ARN for print jobs
-    Value: !GetAtt PrintJobQueue.Arn
+  JobQueueArn:
+    Description: SQS queue ARN for jobs
+    Value: !GetAtt JobQueue.Arn
     Export:
-      Name: !Sub "${AWS::StackName}-PrintJobQueueArn"
+      Name: !Sub "${AWS::StackName}-JobQueueArn"
 
-  PrintJobDLQUrl:
+  JobDLQUrl:
     Description: Dead-letter queue URL for failed jobs
-    Value: !Ref PrintJobDLQ
+    Value: !Ref JobDLQ

@@ -1,0 +1,103 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Vertical Scaling Recipe — RDS PostgreSQL Instance Strategy.
+  Provisions an RDS PostgreSQL instance with provisioned IOPS storage.
+  Scaling is manual: modify instance class and storage as load grows.
+  Use when workload is predictable, latency-sensitive writes are critical,
+  and Aurora Serverless cost model does not fit (e.g., always-on steady load).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the RDS instance
+  DbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the DB subnet group (minimum 2 AZs)
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the processing nodes (source for DB access)
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master password for the RDS instance (read from SSM at deploy time)
+
+Resources:
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Vertical scaling recipe — RDS subnet group
+      SubnetIds: !Ref DbSubnetIds
+      Tags:
+        - Key: ScalingPattern
+          Value: vertical
+
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vertical scaling recipe — RDS allow access from processing nodes
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-rds-sg
+        - Key: ScalingPattern
+          Value: vertical
+
+  # Initial: db.m5.large (2 vCPU, 8 GB RAM) — modern replacement for db.m4.large
+  # Scaling path: db.m5.large → db.m5.xlarge → db.m5.2xlarge → db.m5.4xlarge
+  # Triggers:
+  #   FreeableMemory < 2 GB      → upgrade instance class
+  #   CPUUtilization > 70%        → upgrade instance class
+  #   WriteLatency > 10 ms avg   → increase provisioned IOPS
+  #   StorageSpace < 20% free    → modify AllocatedStorage
+  AppDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: vertical-scaling-db
+      DBInstanceClass: db.m5.large
+      Engine: postgres
+      EngineVersion: "16.3"
+      MasterUsername: app_admin
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: "500"
+      StorageType: io1
+      Iops: 3000
+      MultiAZ: false
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DbSecurityGroup
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      MonitoringInterval: 60
+      EnablePerformanceInsights: true
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-db
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: CurrentSize
+          Value: db.m5.large
+        - Key: UpgradeTo
+          Value: db.m5.4xlarge
+
+Outputs:
+  DBInstanceIdentifier:
+    Description: RDS instance identifier
+    Value: !Ref AppDatabase
+
+  DBEndpoint:
+    Description: RDS endpoint address
+    Value: !GetAtt AppDatabase.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-DBEndpoint"
+
+  DBPort:
+    Description: RDS endpoint port
+    Value: !GetAtt AppDatabase.Endpoint.Port

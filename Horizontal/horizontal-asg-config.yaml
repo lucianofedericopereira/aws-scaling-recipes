@@ -1,0 +1,172 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Horizontal Scaling Recipe — Auto Scaling Group.
+  Elastic fleet of stateless application instances behind an ALB.
+  Target tracking policies on CPU (60%) and ALB request count (1000 req/min per instance).
+  Scheduled actions for predictable traffic peaks (pre-warm + cooldown).
+  Prerequisite: application instances must be stateless — sessions stored in Redis,
+  no local state. Use the horizontal-elasticache-redis stack for session storage.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for the ASG
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Subnets for the ASG (minimum 2 AZs for fault tolerance)
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Pre-baked AMI with app and dependencies installed
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+  AlbTargetGroupArn:
+    Type: String
+    Description: ARN of the ALB target group (from horizontal-alb-config stack)
+  # Scheduled scaling: set these to upcoming event datetime in UTC cron format.
+  # Cron format for ASG: "minute hour day-of-month month day-of-week year"
+  # Example for a promotion starting 2026-11-27 14:00 UTC:
+  #   PromoWarmupCron: "0 13 27 11 ? 2026"   (1 hour before start)
+  #   PromoCooldownCron: "0 20 27 11 ? 2026"  (6 hours after start)
+  PromoWarmupCron:
+    Type: String
+    Default: "0 13 27 11 ? 2026"
+    Description: Cron expression (UTC) to pre-warm ASG before a known traffic peak
+  PromoCooldownCron:
+    Type: String
+    Default: "0 20 27 11 ? 2026"
+    Description: Cron expression (UTC) to return ASG to baseline after the peak
+
+Resources:
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Horizontal scaling recipe — app instances allow traffic from ALB only
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: horizontal-scaling-app-sg
+        - Key: ScalingPattern
+          Value: horizontal
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: horizontal-scaling-lt
+      LaunchTemplateData:
+        ImageId: !Ref AmiId
+        InstanceType: c5.xlarge   # 4 vCPU, 8 GB RAM — adjust for your workload
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            # Pull latest config from SSM Parameter Store
+            # Adapt the SSM path to your application's namespace.
+            aws ssm get-parameters-by-path \
+              --path /horizontal-scaling/production/ \
+              --recursive \
+              --with-decryption \
+              --region "$(curl -s http://169.254.169.254/latest/meta-data/placement/region)"
+            # Start application
+            systemctl start app
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: horizontal-scaling-app
+              - Key: ScalingPattern
+                Value: horizontal
+
+  AppASG:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: horizontal-scaling-asg
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      # Min 2: always maintain at least 2 instances across AZs for fault tolerance.
+      # Max 20: upper bound; raise if you expect sustained traffic beyond this.
+      # Desired 4: cold-start baseline; pre-warm scheduled action raises this before peaks.
+      MinSize: "2"
+      MaxSize: "20"
+      DesiredCapacity: "4"
+      VPCZoneIdentifier: !Ref SubnetIds
+      TargetGroupARNs:
+        - !Ref AlbTargetGroupArn
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 60
+      Tags:
+        - Key: Name
+          Value: horizontal-scaling-app
+          PropagateAtLaunch: true
+        - Key: ScalingPattern
+          Value: horizontal
+          PropagateAtLaunch: true
+
+  # Scale based on CPU — target 60% average utilization
+  # ScaleInCooldown 300s: avoid flapping after a scale-in event.
+  # ScaleOutCooldown 60s: react quickly to traffic spikes.
+  CpuTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 60
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Scale based on ALB request count — target 1000 requests/min per instance
+  # Adjust TargetValue to match your instance's measured saturation point.
+  RequestCountTargetTrackingPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AppASG
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel: !Select [1, !Split ["targetgroup/", !Ref AlbTargetGroupArn]]
+        TargetValue: 1000
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Pre-warm before a known traffic peak (campaign launch, sale start, etc.)
+  # Update PromoWarmupCron parameter to your event's start time - 1 hour.
+  PromoWarmupAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AppASG
+      ScheduledActionName: promo-warmup
+      Recurrence: !Ref PromoWarmupCron
+      MinSize: 10
+      DesiredCapacity: 12
+
+  # Return to baseline after the traffic peak subsides.
+  # Update PromoCooldownCron to your event's expected end time.
+  PromoCooldownAction:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AppASG
+      ScheduledActionName: promo-cooldown
+      Recurrence: !Ref PromoCooldownCron
+      MinSize: 2
+      DesiredCapacity: 4
+
+Outputs:
+  AutoScalingGroupName:
+    Description: ASG name
+    Value: !Ref AppASG
+    Export:
+      Name: !Sub "${AWS::StackName}-ASGName"
+
+  AppSecurityGroupId:
+    Description: App security group ID
+    Value: !Ref AppSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-AppSecurityGroupId"

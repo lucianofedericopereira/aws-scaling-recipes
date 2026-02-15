@@ -1,0 +1,33 @@
+repos:
+  # Secret scanning — prevent credentials from entering git history
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  # Shell script linting
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+        files: \.(sh)$
+
+  # CloudFormation template validation
+  - repo: https://github.com/aws-cloudformation/cfn-lint
+    rev: v1.3.2
+    hooks:
+      - id: cfn-lint
+        files: \.(yaml|yml)$
+        args: ["--include-checks", "I"]
+
+  # General hygiene
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        args: ["--unsafe"]   # Allow CloudFormation-specific YAML tags
+      - id: detect-private-key
+      - id: check-added-large-files
+        args: ["--maxkb=500"]

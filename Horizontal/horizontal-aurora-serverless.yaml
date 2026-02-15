@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Horizontal Scaling Recipe — Aurora Serverless v2 + RDS Proxy.
+  Scales from 2 to 64 ACUs automatically based on load.
+  Two read replicas distribute SELECT queries.
+  RDS Proxy prevents connection storms during ASG scale-out events.
+  Use when database load is unpredictable and you cannot afford manual intervention.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC for Aurora
+  DbSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Private subnets for Aurora (minimum 2 AZs)
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group of the app instances (source for DB access)
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Master password for Aurora (read from SSM at deploy time)
+
+Resources:
+  AuroraSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Horizontal scaling recipe — Aurora subnet group
+      SubnetIds: !Ref DbSubnetIds
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  AuroraSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Horizontal scaling recipe — Aurora allow access from app instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: horizontal-scaling-aurora-sg
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Aurora Serverless v2: min 2 ACU (4 GB RAM), max 64 ACU (128 GB RAM)
+  # 1 ACU = approximately 2 GB RAM.
+  # Billing: per ACU-second — idle clusters scale to MinCapacity only.
+  # Adjust MinCapacity for cold-start latency vs cost tradeoff.
+  AppDBCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: Snapshot
+    Properties:
+      DBClusterIdentifier: horizontal-scaling-db
+      Engine: aurora-postgresql
+      EngineVersion: "16.2"
+      MasterUsername: app_admin
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref AuroraSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 2
+        MaxCapacity: 64
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: "03:00-04:00"
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Primary writer instance (db.serverless class required for Serverless v2)
+  AppDBWriter:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AppDBCluster
+      DBInstanceIdentifier: horizontal-scaling-db-writer
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Read replica 1 — distributes SELECT queries (product catalog, reporting, analytics)
+  # Uses db.r6g.large fixed class: read replicas can use fixed or serverless class.
+  AppDBReader1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AppDBCluster
+      DBInstanceIdentifier: horizontal-scaling-db-reader-1
+      DBInstanceClass: db.r6g.large
+      Engine: aurora-postgresql
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Read replica 2 — additional read capacity for read-heavy workloads
+  AppDBReader2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBClusterIdentifier: !Ref AppDBCluster
+      DBInstanceIdentifier: horizontal-scaling-db-reader-2
+      DBInstanceClass: db.r6g.large
+      Engine: aurora-postgresql
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # RDS Proxy — pools and multiplexes connections.
+  # Without it, 20 new ASG instances each opening ~10 connections = 200 simultaneous
+  # new connections → Aurora connection storm.
+  # Auth: reads credentials from Secrets Manager (pre-create the secret before deploy).
+  RdsProxyRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: horizontal-scaling-rds-proxy-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonRDSFullAccess
+
+  AppRDSProxy:
+    Type: AWS::RDS::DBProxy
+    Properties:
+      DBProxyName: horizontal-scaling-proxy
+      EngineFamily: POSTGRESQL
+      RoleArn: !GetAtt RdsProxyRole.Arn
+      Auth:
+        - AuthScheme: SECRETS
+          IAMAuth: DISABLED
+          # Pre-create this secret in Secrets Manager before deploying.
+          # Secret name convention: horizontal-scaling/db-credentials
+          SecretArn: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:horizontal-scaling/db-credentials"
+      VpcSubnetIds: !Ref DbSubnetIds
+      VpcSecurityGroupIds:
+        - !Ref AuroraSecurityGroup
+      IdleClientTimeout: 300
+      MaxConnectionsPercent: 100
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  RdsProxyTargetGroup:
+    Type: AWS::RDS::DBProxyTargetGroup
+    Properties:
+      DBProxyName: !Ref AppRDSProxy
+      TargetGroupName: default
+      DBClusterIdentifiers:
+        - !Ref AppDBCluster
+      ConnectionPoolConfigurationInfo:
+        MaxConnectionsPercent: 100
+        MaxIdleConnectionsPercent: 50
+
+Outputs:
+  ClusterEndpoint:
+    Description: Aurora cluster writer endpoint
+    Value: !GetAtt AppDBCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-ClusterEndpoint"
+
+  ReaderEndpoint:
+    Description: Aurora cluster reader endpoint
+    Value: !GetAtt AppDBCluster.ReadEndpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-ReaderEndpoint"
+
+  ProxyEndpoint:
+    Description: RDS Proxy endpoint — use this in application config, not the cluster endpoint
+    Value: !GetAtt AppRDSProxy.Endpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-ProxyEndpoint"

@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Vertical Scaling Recipe — EC2 Instance Strategy.
+  Launches compute-optimized, memory-optimized, and storage-optimized instances
+  at their initial sizes. Each instance has upgrade tags marking the next size tier.
+  Scaling is manual: stop instance, change instance type, start instance.
+  Use when the workload is monolithic or stateful and cannot be distributed horizontally.
+
+Parameters:
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 Key Pair for SSH access
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where instances will be launched
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet for the EC2 instances
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: AMI ID (defaults to latest Amazon Linux 2023)
+
+Resources:
+  # Security group for all processing nodes
+  ProcessingSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Vertical scaling recipe — processing nodes (SSH from private network only)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/8
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-processing-sg
+        - Key: ScalingPattern
+          Value: vertical
+
+  # Compute-optimized node (initial: c5.large)
+  # Trigger: CPU utilization > 80% sustained for 5+ min
+  # Upgrade path: c5.large → c5.2xlarge → c5.4xlarge → c5.9xlarge → c5.18xlarge
+  # Workload type: CPU-bound processing (encoding, compression, parsing, rendering)
+  ComputeOptimizedInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: c5.large
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref ProcessingSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-compute-node
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: WorkloadType
+          Value: compute-optimized
+        - Key: CurrentSize
+          Value: c5.large
+        - Key: UpgradeTo
+          Value: c5.4xlarge
+        - Key: ScaleTrigger
+          Value: CPU>80pct-sustained-5min
+
+  # Memory-optimized node (initial: m5.xlarge)
+  # Trigger: memory > 75% or swap usage detected
+  # Upgrade path: m5.xlarge → m5.2xlarge → m5.4xlarge → m5.8xlarge → m5.16xlarge
+  # Workload type: In-memory data processing, large dataset manipulation, caching
+  MemoryOptimizedInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: m5.xlarge
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref ProcessingSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-memory-node
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: WorkloadType
+          Value: memory-optimized
+        - Key: CurrentSize
+          Value: m5.xlarge
+        - Key: UpgradeTo
+          Value: m5.8xlarge
+        - Key: ScaleTrigger
+          Value: Memory>75pct-or-swap-detected
+
+  # Storage-optimized node (initial: i3.large, local NVMe SSD)
+  # Trigger: EBS IOPS saturation or I/O wait > 20%
+  # Upgrade path: i3.large → i3.xlarge → i3.2xlarge → i3.4xlarge → i3.8xlarge
+  # Workload type: High-throughput I/O, large file read/write, sequential scan
+  StorageOptimizedInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: i3.large
+      ImageId: !Ref AmiId
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref ProcessingSecurityGroup
+      SubnetId: !Ref SubnetId
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-storage-node
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: WorkloadType
+          Value: storage-optimized
+        - Key: CurrentSize
+          Value: i3.large
+        - Key: UpgradeTo
+          Value: i3.4xlarge
+        - Key: ScaleTrigger
+          Value: IOPS-saturation-or-IOWait>20pct
+
+Outputs:
+  ComputeNodeInstanceId:
+    Description: Compute-optimized instance (upgrade to c5.4xlarge when CPU > 80%)
+    Value: !Ref ComputeOptimizedInstance
+
+  MemoryNodeInstanceId:
+    Description: Memory-optimized instance (upgrade to m5.8xlarge when memory > 75%)
+    Value: !Ref MemoryOptimizedInstance
+
+  StorageNodeInstanceId:
+    Description: Storage-optimized instance (upgrade to i3.4xlarge when I/O wait > 20%)
+    Value: !Ref StorageOptimizedInstance
+
+  SecurityGroupId:
+    Description: Processing nodes security group
+    Value: !Ref ProcessingSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-SecurityGroupId"

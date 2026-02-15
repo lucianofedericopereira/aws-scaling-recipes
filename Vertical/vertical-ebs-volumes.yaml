@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Vertical Scaling Recipe — EBS Volume Strategy.
+  Provisions io1 (high-IOPS workload), gp3 (general-purpose temp), and sc1 (cold archive)
+  volumes for compute-intensive batch processing pipelines.
+  Adapt volume types and sizes to your specific I/O profile.
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+    Default: us-east-1a
+    Description: AZ where the volumes will be created (must match EC2 instances)
+
+Resources:
+  # High-IOPS volume: io1, 500 GB, 5000 IOPS
+  # Rationale: Workloads writing large files sequentially (e.g. raster output, video frames).
+  # Provisioned IOPS eliminates I/O wait spikes during peak processing.
+  # Adapt: increase Iops up to 64,000 for io1; consider io2 for higher durability (99.999%).
+  HighIopsVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: io1
+      Size: 500
+      Iops: 5000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-high-iops
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: VolumeRole
+          Value: high-iops-workload
+
+  # General-purpose temp volume: gp3, 1000 GB
+  # Rationale: Intermediate/scratch files during processing.
+  # gp3 delivers 3,000 IOPS baseline at no extra cost (vs gp2 burstable model).
+  TempProcessingVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Delete
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: gp3
+      Size: 1000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-temp-processing
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: VolumeRole
+          Value: temp-scratch
+
+  # Cold archive volume: sc1, 5000 GB
+  # Rationale: Completed job storage for compliance, audit, and reprocessing.
+  # sc1 is the lowest-cost HDD option (~$0.015/GB-month); ideal for infrequent access.
+  ArchiveVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      VolumeType: sc1
+      Size: 5000
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: vertical-scaling-archive
+        - Key: ScalingPattern
+          Value: vertical
+        - Key: VolumeRole
+          Value: cold-archive
+
+Outputs:
+  HighIopsVolumeId:
+    Description: High-IOPS volume (io1, 500 GB, 5000 IOPS)
+    Value: !Ref HighIopsVolume
+
+  TempProcessingVolumeId:
+    Description: Temp processing volume (gp3, 1000 GB)
+    Value: !Ref TempProcessingVolume
+
+  ArchiveVolumeId:
+    Description: Cold archive volume (sc1, 5000 GB)
+    Value: !Ref ArchiveVolume

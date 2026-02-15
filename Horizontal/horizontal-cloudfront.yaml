@@ -1,26 +1,28 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Noblex / NEWSAN (2022) — CloudFront CDN.
+  Horizontal Scaling Recipe — CloudFront CDN.
   Offloads static assets (images, JS, CSS) from ALB origin.
-  Reduces ALB origin load by ~60-70% during peak promotional traffic.
-  WAF web ACL for DDoS protection.
+  Reduces ALB and ASG origin load by ~60-70% during peak traffic.
+  WAF web ACL for DDoS protection and rate limiting at the edge.
+  Note: WAF web ACL must be created in us-east-1 (CloudFront is a global service).
 
 Parameters:
   AlbDnsName:
     Type: String
-    Description: DNS name of the Noblex ALB (from noblex-alb-config stack)
+    Description: DNS name of the ALB (from horizontal-alb-config stack)
   WafWebAclArn:
     Type: String
     Description: WAF web ACL ARN (must be in us-east-1 for CloudFront)
 
 Resources:
+  # S3 bucket for static assets served from CloudFront edge locations
   StaticAssetsBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub "noblex-static-${AWS::AccountId}"
+      BucketName: !Sub "horizontal-scaling-static-${AWS::AccountId}"
       Tags:
-        - Key: Project
-          Value: noblex
+        - Key: ScalingPattern
+          Value: horizontal
 
   StaticAssetsBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -33,20 +35,20 @@ Resources:
             Principal:
               CanonicalUser: !GetAtt CloudFrontOAI.S3CanonicalUserId
             Action: s3:GetObject
-            Resource: !Sub "arn:aws:s3:::noblex-static-${AWS::AccountId}/*"
+            Resource: !Sub "arn:aws:s3:::horizontal-scaling-static-${AWS::AccountId}/*"
 
   CloudFrontOAI:
     Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
     Properties:
       CloudFrontOriginAccessIdentityConfig:
-        Comment: Noblex static assets OAI
+        Comment: Horizontal scaling recipe — static assets OAI
 
-  NoblexDistribution:
+  AppDistribution:
     Type: AWS::CloudFront::Distribution
     Properties:
       DistributionConfig:
         Enabled: true
-        Comment: Noblex promotional campaign CDN
+        Comment: Horizontal scaling recipe — CDN
         WebACLId: !Ref WafWebAclArn
         Origins:
           - Id: s3-static-assets
@@ -63,14 +65,14 @@ Resources:
               OriginKeepaliveTimeout: 5
 
         CacheBehaviors:
-          # Static assets: JS, CSS — long cache (1 day default, 7 day max)
+          # Static assets (JS, CSS, fonts) — long cache, served from S3 edge
           - PathPattern: "/static/*"
             TargetOriginId: s3-static-assets
             ViewerProtocolPolicy: redirect-to-https
             CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6   # CachingOptimized
             Compress: true
 
-          # Product images — medium cache (1 hour)
+          # Product/media images — long cache, served from S3 edge
           - PathPattern: "/images/*"
             TargetOriginId: s3-static-assets
             ViewerProtocolPolicy: redirect-to-https
@@ -78,7 +80,7 @@ Resources:
             Compress: true
 
         DefaultCacheBehavior:
-          # API — no cache, forward all to ALB
+          # API and dynamic content — no cache, forward to ALB
           TargetOriginId: alb-api
           ViewerProtocolPolicy: redirect-to-https
           CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad   # CachingDisabled
@@ -96,17 +98,17 @@ Resources:
             - HEAD
 
       Tags:
-        - Key: Project
-          Value: noblex
+        - Key: ScalingPattern
+          Value: horizontal
 
 Outputs:
   DistributionId:
     Description: CloudFront distribution ID
-    Value: !Ref NoblexDistribution
+    Value: !Ref AppDistribution
 
   DistributionDomainName:
     Description: CloudFront distribution domain name
-    Value: !GetAtt NoblexDistribution.DomainName
+    Value: !GetAtt AppDistribution.DomainName
     Export:
       Name: !Sub "${AWS::StackName}-CDNDomainName"
 

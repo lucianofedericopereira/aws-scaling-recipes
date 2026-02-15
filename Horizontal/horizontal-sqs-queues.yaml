@@ -1,0 +1,82 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Horizontal Scaling Recipe — SQS Async Processing Queues.
+  Decouples the HTTP critical path from heavy or slow downstream processing.
+  FIFO queue for operations requiring strict ordering and exactly-once delivery.
+  Standard queues for high-throughput operations where eventual consistency is acceptable.
+  This pattern keeps HTTP response times fast during scale-out events.
+
+Resources:
+  # Critical operations DLQ — failed messages after 5 attempts
+  CriticalOpsDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: horizontal-scaling-critical-dlq.fifo
+      FifoQueue: true
+      MessageRetentionPeriod: 1209600   # 14 days — manual investigation window
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Critical operations queue: FIFO for exactly-once, ordered processing
+  # Use for: orders, payments, financial transactions, inventory deductions
+  # ContentBasedDeduplication: prevents duplicate processing if producer retries.
+  CriticalOpsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: horizontal-scaling-critical-ops.fifo
+      FifoQueue: true
+      ContentBasedDeduplication: true
+      VisibilityTimeout: 60
+      ReceiveMessageWaitTimeSeconds: 20   # Long polling — reduces empty receives and cost
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt CriticalOpsDLQ.Arn
+        maxReceiveCount: 5
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Background tasks queue: Standard — high throughput, eventual consistency acceptable
+  # Use for: cache invalidation, search index updates, inventory sync, audit events
+  BackgroundTasksQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: horizontal-scaling-background-tasks
+      VisibilityTimeout: 30
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+  # Notifications queue: Standard — non-critical, fire-and-forget
+  # Use for: email, SMS, push notifications, webhooks
+  NotificationsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: horizontal-scaling-notifications
+      VisibilityTimeout: 30
+      Tags:
+        - Key: ScalingPattern
+          Value: horizontal
+
+Outputs:
+  CriticalOpsQueueUrl:
+    Description: Critical operations FIFO queue URL (exactly-once, ordered)
+    Value: !Ref CriticalOpsQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-CriticalOpsQueueUrl"
+
+  CriticalOpsQueueArn:
+    Description: Critical operations FIFO queue ARN
+    Value: !GetAtt CriticalOpsQueue.Arn
+
+  BackgroundTasksQueueUrl:
+    Description: Background tasks queue URL (high throughput)
+    Value: !Ref BackgroundTasksQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-BackgroundTasksQueueUrl"
+
+  NotificationsQueueUrl:
+    Description: Notifications queue URL
+    Value: !Ref NotificationsQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-NotificationsQueueUrl"
