@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Horizontal Scaling Recipe — Auto Scaling Group.
+  Horizontal Scaling Recipe - Auto Scaling Group.
   Elastic fleet of stateless application instances behind an ALB.
   Target tracking policies on CPU (60%) and ALB request count (1000 req/min per instance).
   Scheduled actions for predictable traffic peaks (pre-warm + cooldown).
-  Prerequisite: application instances must be stateless — sessions stored in Redis,
+  Prerequisite: application instances must be stateless - sessions stored in Redis,
   no local state. Use the horizontal-elasticache-redis stack for session storage.
 
 Parameters:
@@ -42,7 +42,7 @@ Resources:
   AppSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Horizontal scaling recipe — app instances allow traffic from ALB only
+      GroupDescription: Horizontal scaling recipe - app instances allow traffic from ALB only
       VpcId: !Ref VpcId
       Tags:
         - Key: Name
@@ -56,7 +56,7 @@ Resources:
       LaunchTemplateName: horizontal-scaling-lt
       LaunchTemplateData:
         ImageId: !Ref AmiId
-        InstanceType: c5.xlarge   # 4 vCPU, 8 GB RAM — adjust for your workload
+        InstanceType: c5.xlarge   # 4 vCPU, 8 GB RAM - adjust for your workload
         KeyName: !Ref KeyName
         SecurityGroupIds:
           - !Ref AppSecurityGroup
@@ -106,7 +106,7 @@ Resources:
           Value: horizontal
           PropagateAtLaunch: true
 
-  # Scale based on CPU — target 60% average utilization
+  # Scale based on CPU - target 60% average utilization
   # ScaleInCooldown 300s: avoid flapping after a scale-in event.
   # ScaleOutCooldown 60s: react quickly to traffic spikes.
   CpuTargetTrackingPolicy:
@@ -121,7 +121,7 @@ Resources:
         ScaleInCooldown: 300
         ScaleOutCooldown: 60
 
-  # Scale based on ALB request count — target 1000 requests/min per instance
+  # Scale based on ALB request count - target 1000 requests/min per instance
   # Adjust TargetValue to match your instance's measured saturation point.
   RequestCountTargetTrackingPolicy:
     Type: AWS::AutoScaling::ScalingPolicy

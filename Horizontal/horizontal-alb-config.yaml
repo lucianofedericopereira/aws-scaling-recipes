@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Horizontal Scaling Recipe — Application Load Balancer.
+  Horizontal Scaling Recipe - Application Load Balancer.
   Layer 7 HTTPS load balancer with health checks, HTTPS redirect,
   and WAF-fail-closed protection.
   Use as the entry point for an Auto Scaling Group of stateless application instances.
@@ -20,7 +20,7 @@ Resources:
   AlbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Horizontal scaling recipe — ALB allow HTTPS/HTTP from internet
+      GroupDescription: Horizontal scaling recipe - ALB allow HTTPS/HTTP from internet
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp

@@ -25,7 +25,7 @@ if [[ ! -f "${REPO_ROOT}/config.env" ]]; then
   echo "Copy config.env, fill in your values, then re-run."
   exit 1
 fi
-# shellcheck source=../config.env
+# shellcheck source=config.env
 source "${REPO_ROOT}/config.env"
 
 echo "=== Vertical Scaling Recipe — Deployment ==="

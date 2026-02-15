@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Vertical Scaling Recipe — RDS PostgreSQL Instance Strategy.
+  Vertical Scaling Recipe - RDS PostgreSQL Instance Strategy.
   Provisions an RDS PostgreSQL instance with provisioned IOPS storage.
   Scaling is manual: modify instance class and storage as load grows.
   Use when workload is predictable, latency-sensitive writes are critical,
@@ -26,7 +26,7 @@ Resources:
   DbSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Vertical scaling recipe — RDS subnet group
+      DBSubnetGroupDescription: Vertical scaling recipe - RDS subnet group
       SubnetIds: !Ref DbSubnetIds
       Tags:
         - Key: ScalingPattern
@@ -35,7 +35,7 @@ Resources:
   DbSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Vertical scaling recipe — RDS allow access from processing nodes
+      GroupDescription: Vertical scaling recipe - RDS allow access from processing nodes
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -48,7 +48,7 @@ Resources:
         - Key: ScalingPattern
           Value: vertical
 
-  # Initial: db.m5.large (2 vCPU, 8 GB RAM) — modern replacement for db.m4.large
+  # Initial: db.m5.large (2 vCPU, 8 GB RAM) - modern replacement for db.m4.large
   # Scaling path: db.m5.large → db.m5.xlarge → db.m5.2xlarge → db.m5.4xlarge
   # Triggers:
   #   FreeableMemory < 2 GB      → upgrade instance class

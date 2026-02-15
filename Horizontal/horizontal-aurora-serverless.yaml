@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Horizontal Scaling Recipe — Aurora Serverless v2 + RDS Proxy.
+  Horizontal Scaling Recipe - Aurora Serverless v2 + RDS Proxy.
   Scales from 2 to 64 ACUs automatically based on load.
   Two read replicas distribute SELECT queries.
   RDS Proxy prevents connection storms during ASG scale-out events.
@@ -26,7 +26,7 @@ Resources:
   AuroraSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
-      DBSubnetGroupDescription: Horizontal scaling recipe — Aurora subnet group
+      DBSubnetGroupDescription: Horizontal scaling recipe - Aurora subnet group
       SubnetIds: !Ref DbSubnetIds
       Tags:
         - Key: ScalingPattern
@@ -35,7 +35,7 @@ Resources:
   AuroraSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Horizontal scaling recipe — Aurora allow access from app instances
+      GroupDescription: Horizontal scaling recipe - Aurora allow access from app instances
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -50,7 +50,7 @@ Resources:
 
   # Aurora Serverless v2: min 2 ACU (4 GB RAM), max 64 ACU (128 GB RAM)
   # 1 ACU = approximately 2 GB RAM.
-  # Billing: per ACU-second — idle clusters scale to MinCapacity only.
+  # Billing: per ACU-second - idle clusters scale to MinCapacity only.
   # Adjust MinCapacity for cold-start latency vs cost tradeoff.
   AppDBCluster:
     Type: AWS::RDS::DBCluster
@@ -86,7 +86,7 @@ Resources:
         - Key: ScalingPattern
           Value: horizontal
 
-  # Read replica 1 — distributes SELECT queries (product catalog, reporting, analytics)
+  # Read replica 1 - distributes SELECT queries (product catalog, reporting, analytics)
   # Uses db.r6g.large fixed class: read replicas can use fixed or serverless class.
   AppDBReader1:
     Type: AWS::RDS::DBInstance
@@ -99,7 +99,7 @@ Resources:
         - Key: ScalingPattern
           Value: horizontal
 
-  # Read replica 2 — additional read capacity for read-heavy workloads
+  # Read replica 2 - additional read capacity for read-heavy workloads
   AppDBReader2:
     Type: AWS::RDS::DBInstance
     Properties:
@@ -111,7 +111,7 @@ Resources:
         - Key: ScalingPattern
           Value: horizontal
 
-  # RDS Proxy — pools and multiplexes connections.
+  # RDS Proxy - pools and multiplexes connections.
   # Without it, 20 new ASG instances each opening ~10 connections = 200 simultaneous
   # new connections → Aurora connection storm.
   # Auth: reads credentials from Secrets Manager (pre-create the secret before deploy).
@@ -175,7 +175,7 @@ Outputs:
       Name: !Sub "${AWS::StackName}-ReaderEndpoint"
 
   ProxyEndpoint:
-    Description: RDS Proxy endpoint — use this in application config, not the cluster endpoint
+    Description: RDS Proxy endpoint - use this in application config, not the cluster endpoint
     Value: !GetAtt AppRDSProxy.Endpoint
     Export:
       Name: !Sub "${AWS::StackName}-ProxyEndpoint"

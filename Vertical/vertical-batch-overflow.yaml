@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Vertical Scaling Recipe — AWS Batch Overflow Processing.
+  Vertical Scaling Recipe - AWS Batch Overflow Processing.
   Provides elastic overflow capacity when the primary vertical-scaled EC2 nodes
   are saturated. Scales from zero; Batch handles bursts without permanently
   resizing the primary instance.
@@ -25,7 +25,7 @@ Resources:
   BatchSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Vertical scaling recipe — AWS Batch compute environment
+      GroupDescription: Vertical scaling recipe - AWS Batch compute environment
       VpcId: !Ref VpcId
       Tags:
         - Key: Name
@@ -33,7 +33,7 @@ Resources:
         - Key: ScalingPattern
           Value: vertical
 
-  # Managed compute environment — scales from 0 to 64 vCPUs
+  # Managed compute environment - scales from 0 to 64 vCPUs
   # MinvCpus: 0 means no idle cost; instances terminate when queue drains.
   # Adapt MaxvCpus to match your overflow budget.
   OverflowComputeEnvironment:

@@ -26,7 +26,7 @@ Resources:
   ProcessingSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Vertical scaling recipe — processing nodes (SSH from private network only)
+      GroupDescription: Vertical scaling recipe - processing nodes (SSH from private network only)
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp

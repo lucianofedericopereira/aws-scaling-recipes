@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Horizontal Scaling Recipe — ElastiCache Redis.
+  Horizontal Scaling Recipe - ElastiCache Redis.
   Primary + replica cluster for session store, application cache, rate limiting,
   and cart/state data.
   Redis is required for horizontal scaling: stateless instances must store
@@ -21,7 +21,7 @@ Resources:
   RedisSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Horizontal scaling recipe — Redis allow access from app instances
+      GroupDescription: Horizontal scaling recipe - Redis allow access from app instances
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -38,7 +38,7 @@ Resources:
     Type: AWS::ElastiCache::SubnetGroup
     Properties:
       CacheSubnetGroupName: horizontal-scaling-redis-subnets
-      Description: Horizontal scaling recipe — Redis subnet group
+      Description: Horizontal scaling recipe - Redis subnet group
       SubnetIds: !Ref CacheSubnetIds
 
   # Primary + 1 replica (NumCacheClusters: 2)
@@ -48,12 +48,12 @@ Resources:
   #   application cache: 1–5 min
   #   rate-limit counters: 1 min window
   #   cart / user state: 1 hr
-  # Eviction policy: allkeys-lru — when memory is full, evict least-recently-used keys.
+  # Eviction policy: allkeys-lru - when memory is full, evict least-recently-used keys.
   AppRedisCluster:
     Type: AWS::ElastiCache::ReplicationGroup
     Properties:
       ReplicationGroupId: horizontal-scaling-redis
-      ReplicationGroupDescription: Horizontal scaling recipe — Redis cache cluster
+      ReplicationGroupDescription: Horizontal scaling recipe - Redis cache cluster
       CacheNodeType: cache.r6g.large
       Engine: redis
       EngineVersion: "7.1"
