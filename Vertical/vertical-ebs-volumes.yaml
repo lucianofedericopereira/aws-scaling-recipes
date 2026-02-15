@@ -19,6 +19,7 @@ Resources:
   HighIopsVolume:
     Type: AWS::EC2::Volume
     DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       AvailabilityZone: !Ref AvailabilityZone
       VolumeType: io1
@@ -39,6 +40,7 @@ Resources:
   TempProcessingVolume:
     Type: AWS::EC2::Volume
     DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       AvailabilityZone: !Ref AvailabilityZone
       VolumeType: gp3
@@ -58,6 +60,7 @@ Resources:
   ArchiveVolume:
     Type: AWS::EC2::Volume
     DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       AvailabilityZone: !Ref AvailabilityZone
       VolumeType: sc1

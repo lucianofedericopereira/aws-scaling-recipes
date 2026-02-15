@@ -55,6 +55,7 @@ Resources:
   AppDBCluster:
     Type: AWS::RDS::DBCluster
     DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       DBClusterIdentifier: horizontal-scaling-db
       Engine: aurora-postgresql

@@ -58,6 +58,7 @@ Resources:
   AppDatabase:
     Type: AWS::RDS::DBInstance
     DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
     Properties:
       DBInstanceIdentifier: vertical-scaling-db
       DBInstanceClass: db.m5.large

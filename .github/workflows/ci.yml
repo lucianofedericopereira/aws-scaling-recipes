@@ -65,11 +65,12 @@ jobs:
         run: sudo apt-get install -y shellcheck
 
       - name: Lint shell scripts
+        # -x: follow sourced files  --source-path=.: resolve relative source paths from repo root
         run: |
-          shellcheck deploy.sh
-          shellcheck main.sh
-          shellcheck Vertical/launch_vertical.sh
-          shellcheck Horizontal/launch_horizontal.sh
+          shellcheck -x --source-path=. deploy.sh
+          shellcheck -x --source-path=. main.sh
+          shellcheck -x --source-path=. Vertical/launch_vertical.sh
+          shellcheck -x --source-path=. Horizontal/launch_horizontal.sh
 
   # ---------------------------------------------------------------------------
   # Verify no REPLACE_ME placeholders remain in YAML templates

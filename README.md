@@ -37,10 +37,20 @@ Two complete, ready-to-deploy scenarios covering the two fundamental scaling str
 
 ### Architecture
 
-```
-Client → S3 (incoming jobs) → SQS → EC2 processing nodes → S3 (output)
-                                          |
-                                    AWS Batch (overflow, scales 0→64 vCPU)
+```mermaid
+flowchart LR
+    Client([Client]) --> S3in[(S3\nIncoming Jobs)]
+    S3in -->|S3 Event| SQS[[SQS\nJob Queue]]
+    SQS --> EC2A[EC2\nCompute Node\nc5.large]
+    SQS --> EC2B[EC2\nMemory Node\nm5.xlarge]
+    SQS --> EC2C[EC2\nStorage Node\ni3.large]
+    EC2A & EC2B & EC2C --> S3out[(S3\nOutput)]
+    SQS -->|depth > 100| Batch[[AWS Batch\nOverflow\n0 → 64 vCPU]]
+    Batch --> S3out
+    EC2A & EC2B & EC2C --- RDS[(RDS PostgreSQL\ndb.m5.large\nio1 3000 IOPS)]
+
+    style Batch fill:#f5a623,color:#000
+    style RDS fill:#3b82f6,color:#fff
 ```
 
 ### Vertical scaling path
@@ -90,24 +100,43 @@ aws ssm put-parameter \
 
 ### Architecture
 
-```
-                    CloudFront CDN
-                    (static assets + WAF)
-                          |
-                    ALB (Layer 7, TLS 1.3)
-                          |
-              ┌───────────┼───────────┐
-              │           │           │
-           EC2 #1      EC2 #2      EC2 #N    ← ASG (min: 2, max: 20)
-              │           │           │
-              └───────────┼───────────┘
-                          |
-         ┌────────────────┼────────────────┐
-         │                │                │
-   Aurora Serverless  ElastiCache      SQS Queues
-   v2 (2–64 ACU)      Redis 7          (critical FIFO,
-   + RDS Proxy        (sessions, cache, background tasks,
-   + 2 read replicas   rate limiting)   notifications)
+```mermaid
+flowchart TD
+    User([User]) --> CF
+
+    subgraph Edge["Edge (us-east-1)"]
+        CF[CloudFront CDN\nWAF + TLS]
+        S3static[(S3\nStatic Assets)]
+    end
+
+    CF -->|/static/* /images/*| S3static
+    CF -->|/api/* dynamic| ALB
+
+    subgraph AppTier["App Tier — ASG min:2 max:20"]
+        ALB[ALB\nLayer 7 / TLS 1.3]
+        ALB --> EC2A[EC2 c5.xlarge]
+        ALB --> EC2B[EC2 c5.xlarge]
+        ALB --> EC2N[EC2 c5.xlarge\n...]
+    end
+
+    subgraph DataTier["Data Tier — private subnets"]
+        Proxy[RDS Proxy\nconnection pool]
+        Aurora[(Aurora Serverless v2\n2–64 ACU\nwriter + 2 readers)]
+        Redis[(ElastiCache Redis 7\nprimary + replica\nsessions · cache · rate-limit)]
+        SQS_F[[SQS FIFO\nCritical Ops\nexactly-once]]
+        SQS_S[[SQS Standard\nBackground · Notifications]]
+    end
+
+    EC2A & EC2B & EC2N --> Proxy
+    EC2A & EC2B & EC2N --> Redis
+    EC2A & EC2B & EC2N --> SQS_F
+    EC2A & EC2B & EC2N --> SQS_S
+    Proxy --> Aurora
+
+    style CF fill:#f5a623,color:#000
+    style Aurora fill:#3b82f6,color:#fff
+    style Redis fill:#ef4444,color:#fff
+    style Proxy fill:#8b5cf6,color:#fff
 ```
 
 ### Key design decisions

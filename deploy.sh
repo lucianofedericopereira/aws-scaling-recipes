@@ -18,6 +18,20 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="${REPO_ROOT}/config.env"
+
+# ---------------------------------------------------------------------------
+# Load config (variables sourced here are used throughout)
+# ---------------------------------------------------------------------------
+load_config() {
+  if [[ ! -f "${CONFIG_FILE}" ]]; then
+    echo "ERROR: config.env not found at ${CONFIG_FILE}"
+    echo "Edit config.env and fill in your values, then re-run."
+    exit 1
+  fi
+  # shellcheck source=config.env
+  source "${CONFIG_FILE}"
+}
 
 # ---------------------------------------------------------------------------
 # Prerequisites check
@@ -32,9 +46,8 @@ check_prerequisites() {
     echo "  [FAIL] aws CLI not found. Install AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
     errors=$((errors + 1))
   else
-    local cli_version
+    local cli_version cli_major
     cli_version=$(aws --version 2>&1 | awk '{print $1}' | cut -d/ -f2)
-    local cli_major
     cli_major=$(echo "${cli_version}" | cut -d. -f1)
     if [[ "${cli_major}" -lt 2 ]]; then
       echo "  [FAIL] AWS CLI v2 required, found v${cli_version}"
@@ -49,31 +62,27 @@ check_prerequisites() {
     echo "  [FAIL] AWS credentials not configured or not valid. Run: aws configure"
     errors=$((errors + 1))
   else
-    local account region
+    local account cfg_region
     account=$(aws sts get-caller-identity --query Account --output text)
-    region=$(aws configure get region 2>/dev/null || echo "not set")
-    echo "  [OK]   AWS account: ${account}, default region: ${region}"
+    cfg_region=$(aws configure get region 2>/dev/null || echo "not set")
+    echo "  [OK]   AWS account: ${account}, default region: ${cfg_region}"
   fi
 
   # config.env
-  if [[ ! -f "${REPO_ROOT}/config.env" ]]; then
+  if [[ ! -f "${CONFIG_FILE}" ]]; then
     echo "  [FAIL] config.env not found. Edit config.env and fill in your values."
     errors=$((errors + 1))
   else
-    # shellcheck source=config.env
-    source "${REPO_ROOT}/config.env"
+    load_config
     local placeholders
-    placeholders=$(grep -c "REPLACE_ME" "${REPO_ROOT}/config.env" || true)
+    placeholders=$(grep -c "REPLACE_ME" "${CONFIG_FILE}" || true)
     if [[ "${placeholders}" -gt 0 ]]; then
       echo "  [WARN] config.env has ${placeholders} unreplaced REPLACE_ME placeholder(s)"
     else
       echo "  [OK]   config.env (no placeholders found)"
     fi
-  fi
 
-  # Vertical SSM parameter
-  if [[ -f "${REPO_ROOT}/config.env" ]]; then
-    source "${REPO_ROOT}/config.env"
+    # SSM parameters
     if aws ssm get-parameter --name "${VERTICAL_DB_PASSWORD_PARAM}" \
         --region "${REGION}" &>/dev/null 2>&1; then
       echo "  [OK]   SSM parameter ${VERTICAL_DB_PASSWORD_PARAM} exists"
@@ -114,6 +123,8 @@ destroy_all() {
     exit 1
   fi
 
+  load_config
+
   local stacks=(
     "vertical-scaling-cloudwatch"
     "vertical-scaling-batch-overflow"
@@ -129,8 +140,6 @@ destroy_all() {
     "horizontal-scaling-asg"
     "horizontal-scaling-alb"
   )
-
-  source "${REPO_ROOT}/config.env"
 
   for stack in "${stacks[@]}"; do
     if aws cloudformation describe-stacks \

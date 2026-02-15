@@ -59,7 +59,7 @@ validate:
 lint-shell:
 	@echo "=== Linting shell scripts ==="
 	@command -v shellcheck >/dev/null 2>&1 || { echo "shellcheck not found. Install: apt install shellcheck / brew install shellcheck"; exit 1; }
-	@shellcheck deploy.sh main.sh Vertical/launch_vertical.sh Horizontal/launch_horizontal.sh
+	@shellcheck -x --source-path=. deploy.sh main.sh Vertical/launch_vertical.sh Horizontal/launch_horizontal.sh
 	@echo "All shell scripts passed shellcheck."
 
 lint: validate lint-shell
