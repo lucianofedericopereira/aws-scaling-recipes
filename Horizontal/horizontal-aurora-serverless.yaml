@@ -140,7 +140,6 @@ Resources:
       VpcSecurityGroupIds:
         - !Ref AuroraSecurityGroup
       IdleClientTimeout: 300
-      MaxConnectionsPercent: 100
       Tags:
         - Key: ScalingPattern
           Value: horizontal
